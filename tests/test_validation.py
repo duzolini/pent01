@@ -27,7 +27,7 @@ B = f"http://127.0.0.1:{PORT}"
 class _Server:
     def __init__(self):
         from vuln_app import app
-        self.srv = make_server("127.0.0.1", PORT, app)
+        self.srv = make_server("127.0.0.1", PORT, app, threaded=True)
         self.th = threading.Thread(target=self.srv.serve_forever, daemon=True)
 
     def __enter__(self):
@@ -94,6 +94,47 @@ def test_exploit_plans_generated():
     assert tools == {"sqlmap", "metasploit", "hydra"}
     msf = next(p for p in r.exploit_plans if p.tool == "metasploit")
     assert "struts2_content_type_ognl" in msf.command_str()
+
+
+def test_cors_and_ssrf_confirmed():
+    from orchestrator.models import Finding, Severity
+    with _Server():
+        r = ScanResult()
+        r.add_finding(Finding("CORS misconfiguration", Severity.MEDIUM, f"{B}/api", "x"))
+        r.add_finding(Finding("SSRF candidate", Severity.HIGH, f"{B}/fetch?url=x", "x",
+                              metadata={"param": "url", "oob_url": f"{B}/ssrf-canary"}))
+        validators.validate_findings(r, _scope())
+    by = {f.title: f.validation for f in r.findings}
+    assert by["CORS misconfiguration"].status == "confirmed"
+    assert "reflects arbitrary origin" in by["CORS misconfiguration"].evidence
+    assert by["SSRF candidate"].status == "confirmed"
+
+
+def _make_jwt(alg: str, secret: str = "") -> str:
+    import base64, hashlib, hmac, json
+    def b(x): return base64.urlsafe_b64encode(x).rstrip(b"=").decode()
+    header = b(json.dumps({"alg": alg, "typ": "JWT"}).encode())
+    payload = b(json.dumps({"user": "admin"}).encode())
+    if alg == "none":
+        return f"{header}.{payload}."
+    mac = hmac.new(secret.encode(), f"{header}.{payload}".encode(), hashlib.sha256).digest()
+    return f"{header}.{payload}.{b(mac)}"
+
+
+def test_jwt_validator():
+    from orchestrator.models import Finding, Severity
+    r = ScanResult()
+    r.add_finding(Finding("JWT weak secret", Severity.HIGH, "http://h/", "x",
+                          metadata={"token": _make_jwt("HS256", "secret")}))
+    r.add_finding(Finding("JWT alg none", Severity.HIGH, "http://h/", "x",
+                          metadata={"token": _make_jwt("none")}))
+    r.add_finding(Finding("JWT strong", Severity.HIGH, "http://h/", "x",
+                          metadata={"token": _make_jwt("HS256", "a-very-long-random-secret-xyz")}))
+    validators.validate_findings(r, _scope())
+    by = {f.title: f.validation for f in r.findings}
+    assert by["JWT weak secret"].status == "confirmed" and "secret" in by["JWT weak secret"].evidence
+    assert by["JWT alg none"].status == "confirmed"
+    assert by["JWT strong"].status == "not_confirmed"
 
 
 def test_execution_gates():

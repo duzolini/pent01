@@ -7,6 +7,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from orchestrator import store
 from orchestrator.models import ScanResult, Finding, Severity
 
+
+def _weak_jwt(secret: str) -> str:
+    import base64, hashlib, hmac, json
+    def b(x): return base64.urlsafe_b64encode(x).rstrip(b"=").decode()
+    h = b(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
+    p = b(json.dumps({"user": "admin"}).encode())
+    mac = hmac.new(secret.encode(), f"{h}.{p}".encode(), hashlib.sha256).digest()
+    return f"{h}.{p}.{b(mac)}"
+
+
 B = "http://127.0.0.1:5001"
 r = ScanResult(scope_name="local-vuln-lab", status="done",
                targets=["127.0.0.1"],
@@ -32,6 +42,14 @@ F = [
             "Responds like CVE-2017-5638.", metadata={"template": "CVE-2017-5638"}),
     Finding("SSH default credentials", Severity.HIGH, "127.0.0.1:22", "nuclei",
             "SSH login present; test for weak credentials."),
+    Finding("CORS misconfiguration", Severity.MEDIUM, f"{B}/api", "nuclei",
+            "Access-Control-Allow-Origin may reflect arbitrary origins."),
+    Finding("SSRF candidate", Severity.HIGH, f"{B}/fetch?url=http://x", "nuclei",
+            "Parameter 'url' may allow server-side requests.",
+            metadata={"param": "url", "oob_url": f"{B}/ssrf-canary"}),
+    Finding("JWT weak secret", Severity.HIGH, f"{B}/", "nuclei",
+            "A JWT appears signed with a weak HMAC secret.",
+            metadata={"token": _weak_jwt("secret")}),
 ]
 for f in F:
     r.add_finding(f)

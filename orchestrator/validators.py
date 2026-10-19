@@ -14,6 +14,10 @@ Every validator re-checks scope before sending a request.
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import json
 import socket
 import ssl
 import urllib.parse
@@ -242,11 +246,121 @@ def _similar(a: str, b: str, tol: float = 0.05) -> bool:
     return abs(len(a) - len(b)) / longer <= tol
 
 
+class CorsValidator(Validator):
+    name = "cors-misconfig"
+    _ORIGIN = "https://evil-cors.example.invalid"
+
+    def matches(self, f: Finding) -> bool:
+        return "cors" in f.title.lower() or "access-control-allow-origin" in f.description.lower()
+
+    def run(self, f: Finding, scope: Scope) -> Validation:
+        if not scope.is_in_scope(f.target):
+            return Validation("skipped", self.name, detail="target out of scope")
+        req = urllib.request.Request(f.target, headers={"User-Agent": _UA, "Origin": self._ORIGIN})
+        try:
+            with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
+                headers = {k.lower(): v for k, v in resp.headers.items()}
+        except urllib.error.HTTPError as e:
+            headers = {k.lower(): v for k, v in (e.headers or {}).items()}
+        except Exception as exc:  # noqa: BLE001
+            return Validation("error", self.name, detail=str(exc))
+        acao = headers.get("access-control-allow-origin", "")
+        acac = headers.get("access-control-allow-credentials", "").lower()
+        if acao == self._ORIGIN or (acao == "*" and acac == "true"):
+            cred = " with credentials" if acac == "true" else ""
+            return Validation("confirmed", self.name,
+                              evidence=f"ACAO reflects arbitrary origin{cred}: "
+                                       f"Access-Control-Allow-Origin: {acao}",
+                              detail="Cross-origin reads from attacker origin are permitted.")
+        return Validation("not_confirmed", self.name,
+                          detail=f"ACAO={acao or 'none'}, ACAC={acac or 'none'}")
+
+
+class SsrfValidator(Validator):
+    name = "ssrf"
+    _TOKEN = "ssrf0canary0marker"
+
+    def matches(self, f: Finding) -> bool:
+        return "ssrf" in f.title.lower() or "server-side request forgery" in f.title.lower()
+
+    def run(self, f: Finding, scope: Scope) -> Validation:
+        if not scope.is_in_scope(f.target):
+            return Validation("skipped", self.name, detail="target out of scope")
+        # Needs a canary URL we control whose body carries a unique token. In a
+        # real engagement this is an out-of-band (OOB) listener; here it comes
+        # from the finding metadata. Reflected (non-blind) SSRF only.
+        canary = f.metadata.get("oob_url")
+        param = f.metadata.get("param", "url")
+        if not canary:
+            return Validation("unverified", self.name,
+                              detail="blind SSRF: supply metadata.oob_url (an OOB listener) to confirm")
+        test = _with_param(f.target, param, canary)
+        _, _, body = _http(test)
+        if self._TOKEN in body or "canary" in body.lower():
+            return Validation("confirmed", self.name,
+                              evidence=f"server fetched attacker-specified URL via '{param}'; "
+                                       f"canary body reflected",
+                              detail="Server-side request to an attacker-controlled URL confirmed.")
+        return Validation("not_confirmed", self.name,
+                          detail="no canary reflection (may be blind SSRF — use an OOB listener)")
+
+
+class JwtValidator(Validator):
+    name = "jwt-weakness"
+    # Small list of common/weak HMAC secrets for a quick offline check.
+    _WEAK = ["secret", "password", "123456", "changeme", "jwt", "admin",
+             "key", "secretkey", "your-256-bit-secret", "test"]
+
+    def matches(self, f: Finding) -> bool:
+        t = f.title.lower()
+        return "jwt" in t or "json web token" in t
+
+    def run(self, f: Finding, scope: Scope) -> Validation:
+        token = f.metadata.get("token", "")
+        if token.count(".") != 2:
+            return Validation("unverified", self.name,
+                              detail="no JWT in metadata.token to analyse")
+        header_b64, payload_b64, sig_b64 = token.split(".")
+        try:
+            header = json.loads(_b64url_decode(header_b64))
+        except Exception:  # noqa: BLE001
+            return Validation("error", self.name, detail="could not decode JWT header")
+        alg = str(header.get("alg", "")).lower()
+
+        # 1) alg:none — signature not verified.
+        if alg == "none":
+            return Validation("confirmed", self.name,
+                              evidence="JWT header uses alg:none — token accepted without a signature",
+                              detail="Forge arbitrary claims by setting alg:none.")
+        # 2) weak HMAC secret — try to recompute the signature.
+        if alg in ("hs256", "hs384", "hs512"):
+            digest = {"hs256": hashlib.sha256, "hs384": hashlib.sha384,
+                      "hs512": hashlib.sha512}[alg]
+            signing_input = f"{header_b64}.{payload_b64}".encode()
+            for secret in f.metadata.get("wordlist", self._WEAK):
+                mac = hmac.new(secret.encode(), signing_input, digest).digest()
+                if hmac.compare_digest(_b64url(mac), sig_b64):
+                    return Validation("confirmed", self.name,
+                                      evidence=f"HMAC secret cracked offline: '{secret}'",
+                                      detail="Sign arbitrary tokens with the recovered secret.")
+            return Validation("not_confirmed", self.name,
+                              detail=f"{alg} signature not matched by the weak-secret list")
+        return Validation("unverified", self.name, detail=f"alg '{alg}' not auto-checked")
+
+
+def _b64url_decode(data: str) -> bytes:
+    return base64.urlsafe_b64decode(data + "=" * (-len(data) % 4))
+
+
+def _b64url(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+
 # ---------------------------------------------------------------------- #
 _REGISTRY: list[Validator] = [
     GitExposedValidator(), DirectoryListingValidator(), SecurityHeaderValidator(),
     OpenRedirectValidator(), ReflectedXssValidator(), LfiValidator(),
-    SqlInjectionValidator(),
+    SqlInjectionValidator(), CorsValidator(), SsrfValidator(), JwtValidator(),
 ]
 
 

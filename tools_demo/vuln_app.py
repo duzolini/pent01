@@ -73,5 +73,33 @@ def assets():
             "<h1>Index of /assets/</h1><pre>app.js\nstyle.css\nbackup.zip</pre></body></html>")
 
 
+@app.route("/api")
+def api():
+    # CORS misconfiguration: reflects any Origin and allows credentials.
+    resp = Response('{"ok":true}', mimetype="application/json")
+    origin = request.headers.get("Origin")
+    if origin:
+        resp.headers["Access-Control-Allow-Origin"] = origin
+        resp.headers["Access-Control-Allow-Credentials"] = "true"
+    return resp
+
+
+@app.route("/ssrf-canary")
+def ssrf_canary():
+    return "ssrf0canary0marker"
+
+
+@app.route("/fetch")
+def fetch():
+    # SSRF: fetches an attacker-supplied URL server-side and returns the body.
+    import urllib.request
+    url = request.args.get("url", "")
+    try:
+        with urllib.request.urlopen(url, timeout=5) as r:
+            return Response(r.read(2000), mimetype="text/plain")
+    except Exception as exc:  # noqa: BLE001
+        return Response(f"fetch error: {exc}", status=502)
+
+
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=5001)
+    app.run(host="127.0.0.1", port=5001, threaded=True)

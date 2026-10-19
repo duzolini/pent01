@@ -8,9 +8,14 @@
 <p class="muted">Scope: {{ r.scope_name }} · targets: {{ r.targets|join(', ') }}
   {% if live %}· <span class="s-running">live — auto-refreshing…</span>{% endif %}</p>
 
-<p>
+<p style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
   <a class="btn secondary" href="{{ url_for('report_html', scan_id=r.scan_id) }}" target="_blank">Open HTML report</a>
   <a class="btn secondary" href="{{ url_for('report_md', scan_id=r.scan_id) }}" target="_blank">Markdown</a>
+  {% if not live and r.findings %}
+  <form method="post" action="{{ url_for('validate', scan_id=r.scan_id) }}" style="display:inline">
+    <button class="btn" type="submit">{{ 'Re-validate findings' if validated else 'Validate findings (safe)' }}</button>
+  </form>
+  {% endif %}
 </p>
 
 {% if r.authorization %}
@@ -74,6 +79,22 @@
     <div><span class="muted">risk</span> {{ p.risk }}</div>
     <div><span class="muted">command</span> <code>{{ p.command_str() }}</code></div>
   </div>
+  {% if p.output %}
+    <pre style="background:rgba(127,127,127,.12);padding:8px 10px;border-radius:6px;font-size:12px;overflow:auto;max-height:240px;margin-top:8px">{{ p.output }}</pre>
+  {% endif %}
+  {% if intrusive %}
+    <form method="post" action="{{ url_for('run_exploit', scan_id=r.scan_id, plan_id=p.plan_id) }}"
+          style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"
+          onsubmit="return confirm('Execute this exploit command against the target? This is active exploitation.');">
+      <span class="muted" style="font-size:12px">type <code>{{ p.plan_id }}</code> to execute:</span>
+      <input type="text" name="confirm_id" autocomplete="off" placeholder="{{ p.plan_id }}"
+             style="padding:6px 8px;border-radius:6px;border:1px solid var(--line);background:var(--card);color:var(--ink);font-family:monospace">
+      <button class="btn" type="submit" style="background:var(--err)">Execute</button>
+    </form>
+  {% else %}
+    <div class="muted" style="font-size:12px;margin-top:8px">Execution disabled — scope is not
+      <code>intrusive</code>. Enable it in the scope file only with explicit authorization.</div>
+  {% endif %}
 </div>
 {% endfor %}
 {% endif %}

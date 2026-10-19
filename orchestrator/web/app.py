@@ -30,6 +30,18 @@ def _discover_scopes() -> list[Path]:
     return sorted(SCOPES_DIR.glob("*.y*ml"))
 
 
+def _scope_for(result) -> Scope | None:
+    """Find the scope file whose name matches the scan's scope_name."""
+    for p in _discover_scopes():
+        try:
+            s = Scope.load(p)
+        except ScopeError:
+            continue
+        if s.name == result.scope_name:
+            return s
+    return None
+
+
 def _launch(scope: Scope) -> str:
     runner = Runner(scope)
     result_holder: dict[str, str] = {}
@@ -98,7 +110,55 @@ def create_app() -> Flask:
         if result is None:
             abort(404)
         live = result.status == "running"
-        return render_template("scan.html", r=result, live=live)
+        scope = _scope_for(result)
+        validated = any(f.validation for f in result.findings)
+        return render_template("scan.html", r=result, live=live,
+                               intrusive=bool(scope and scope.intrusive),
+                               validated=validated)
+
+    @app.route("/scan/<scan_id>/validate", methods=["POST"])
+    def validate(scan_id: str):
+        from .. import exploit, validators
+        result = store.load(scan_id)
+        if result is None:
+            abort(404)
+        scope = _scope_for(result)
+        if scope is None:
+            flash(f"no scope file named '{result.scope_name}' to validate against.", "error")
+            return redirect(url_for("detail", scan_id=scan_id))
+        try:
+            n = validators.validate_findings(result, scope)
+            exploit.build_plans(result, scope)
+            store.save(result)
+            flash(f"Validated: {n} finding(s) confirmed, {len(result.exploit_plans)} "
+                  "exploit plan(s) proposed.", "ok")
+        except ScopeError as exc:
+            flash(str(exc), "error")
+        return redirect(url_for("detail", scan_id=scan_id))
+
+    @app.route("/scan/<scan_id>/exploit/<plan_id>", methods=["POST"])
+    def run_exploit(scan_id: str, plan_id: str):
+        from .. import exploit
+        result = store.load(scan_id)
+        if result is None:
+            abort(404)
+        plan = result.plan_by_id(plan_id)
+        if plan is None:
+            abort(404)
+        scope = _scope_for(result)
+        if scope is None:
+            flash("no scope file to authorize this execution.", "error")
+            return redirect(url_for("detail", scan_id=scan_id))
+        # The typed confirmation must exactly equal the plan id.
+        typed = request.form.get("confirm_id", "").strip()
+        if typed != plan_id:
+            flash("Confirmation mismatch — type the exact plan id to execute.", "error")
+            return redirect(url_for("detail", scan_id=scan_id))
+        plan = exploit.execute_plan(result, plan_id, scope, confirm=True)
+        store.save(result)
+        flash(f"Plan {plan_id}: {plan.status}.",
+              "ok" if plan.status == "executed" else "error")
+        return redirect(url_for("detail", scan_id=scan_id))
 
     @app.route("/scan/<scan_id>/report.html")
     def report_html(scan_id: str):

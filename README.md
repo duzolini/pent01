@@ -51,6 +51,9 @@ Confirma o finding sem causar dano e anexa a evidência:
 | `.git` exposto | `/.git/config` retorna config git válido |
 | Directory listing | resposta contém autoindex `Index of /` |
 | Headers / TLS | recheck ao vivo do header ausente / versão depreciada |
+| CORS misconfig | `Access-Control-Allow-Origin` reflete origem arbitrária (+ credenciais) |
+| SSRF | servidor busca URL do atacante; canário OOB refletido (não-cego) |
+| JWT fraco | `alg:none`, ou secret HMAC quebrado offline por lista |
 
 Nada aqui escreve, apaga ou extrai em massa — só confirma.
 
@@ -70,9 +73,16 @@ orchestrator plans <SCAN_ID>                           # lista os comandos propo
 orchestrator exploit scopes/cliente.yaml <SCAN_ID> <PLAN_ID> --confirm
 ```
 
-Mapeamentos atuais: SQLi → `sqlmap`, CVE de serviço → `metasploit`,
+Mapeamentos atuais: SQLi → `sqlmap`, CVE de serviço → `metasploit`
+(~20 CVEs conhecidas mapeadas: EternalBlue, Log4Shell, Spring4Shell, Struts,
+BlueKeep, PrintNightmare, Ghostcat, Heartbleed, WebLogic, vCenter…),
 credenciais → `hydra`. **Não existe** modo "auto-explorar tudo": exploração que
 pode derrubar o alvo ou alterar dados é decisão humana, por alvo.
+
+No **dashboard**, a tela do scan tem um botão **Validate findings** e, quando o
+escopo é `intrusive: true`, cada plano ganha um botão **Execute** que exige
+digitar o id do plano para confirmar — os mesmos gates da CLI, aplicados no
+backend.
 
 ### Laboratório local
 
