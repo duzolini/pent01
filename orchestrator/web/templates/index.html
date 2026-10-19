@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block body %}
+
+<div class="banner">
+  This tool runs only against scopes you have marked <code>authorized: true</code> after
+  obtaining written permission. Each scan records who authorized it. Never point it at systems
+  you are not permitted to test.
+</div>
+
+<h2>Start a scan</h2>
+<div class="card">
+  {% if scopes %}
+  <form method="post" action="{{ url_for('scan') }}">
+    <label for="scope_file">Scope</label>
+    <select name="scope_file" id="scope_file">
+      {% for s in scopes %}
+      <option value="{{ s.path }}" {% if not s.authorized %}disabled{% endif %}>
+        {{ s.name }} — {{ s.targets }}{% if not s.authorized %}  (not authorized){% endif %}
+      </option>
+      {% endfor %}
+    </select>
+    <div class="check">
+      <input type="checkbox" name="confirm" id="confirm">
+      <label for="confirm" style="margin:0">I confirm I hold written authorization to test the
+        targets in the selected scope.</label>
+    </div>
+    <button class="btn" type="submit">Launch authorized scan</button>
+  </form>
+  {% else %}
+  <p class="muted">No scope files found. Create one in the <code>scopes/</code> directory
+    (e.g. <code>orchestrator init-scope scopes/example.yaml</code>), fill in the authorization
+    fields, and set <code>authorized: true</code>.</p>
+  {% endif %}
+</div>
+
+<h3>Available scopes</h3>
+<div class="card">
+  <table><thead><tr><th>Name</th><th>File</th><th>Targets</th><th>Authorized</th></tr></thead>
+  <tbody>
+  {% for s in scopes %}
+    <tr><td>{{ s.name }}</td><td><code>{{ s.path }}</code></td><td class="muted">{{ s.targets }}</td>
+    <td>{% if s.authorized %}<span class="pill yes">yes</span>{% else %}<span class="pill no">no</span>{% endif %}</td></tr>
+  {% else %}
+    <tr><td colspan="4" class="muted">none</td></tr>
+  {% endfor %}
+  </tbody></table>
+</div>
+
+<h2>Recent scans</h2>
+<div class="card">
+  <table><thead><tr><th>Scan</th><th>Scope</th><th>Status</th><th>Findings</th><th>Assets</th></tr></thead>
+  <tbody>
+  {% for s in scans %}
+    <tr>
+      <td><a href="{{ url_for('detail', scan_id=s.scan_id) }}"><code>{{ s.scan_id }}</code></a></td>
+      <td>{{ s.scope_name }}</td>
+      <td class="s-{{ s.status }}">{{ s.status }}</td>
+      <td>{% set c = s.severity_counts() %}
+        {{ s.findings|length }} <span class="muted">(H{{ c.high }}/M{{ c.medium }})</span></td>
+      <td>{{ s.assets|length }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="5" class="muted">no scans yet</td></tr>
+  {% endfor %}
+  </tbody></table>
+</div>
+
+{% endblock %}

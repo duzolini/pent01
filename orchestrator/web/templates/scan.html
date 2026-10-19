@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}Scan {{ r.scan_id }}{% endblock %}
+{% block head %}{% if live %}<meta http-equiv="refresh" content="4">{% endif %}{% endblock %}
+{% block body %}
+
+<h2>Scan <code>{{ r.scan_id }}</code>
+  <span class="s-{{ r.status }}" style="font-size:13px">· {{ r.status }}</span></h2>
+<p class="muted">Scope: {{ r.scope_name }} · targets: {{ r.targets|join(', ') }}
+  {% if live %}· <span class="s-running">live — auto-refreshing…</span>{% endif %}</p>
+
+<p>
+  <a class="btn secondary" href="{{ url_for('report_html', scan_id=r.scan_id) }}" target="_blank">Open HTML report</a>
+  <a class="btn secondary" href="{{ url_for('report_md', scan_id=r.scan_id) }}" target="_blank">Markdown</a>
+</p>
+
+{% if r.authorization %}
+<div class="card">
+  <h3>Authorization</h3>
+  <div class="muted" style="font-size:13px">
+    client: {{ r.authorization.client or '—' }} ·
+    authorized by: {{ r.authorization.authorized_by or '—' }} ·
+    ref: {{ r.authorization.authorization_ref or '—' }}
+  </div>
+</div>
+{% endif %}
+
+<h3>Findings by severity</h3>
+<div class="card">
+  {% set c = r.severity_counts() %}
+  {% for sev in ['critical','high','medium','low','info'] %}
+    <span class="sev {{ sev }}">{{ sev }}: {{ c[sev] }}</span>
+  {% endfor %}
+</div>
+
+<h2>Findings</h2>
+{% if r.findings %}
+  {% for f in r.sorted_findings() %}
+  <div class="card" style="border-left:4px solid; padding:12px 14px">
+    <div style="display:flex;gap:10px;align-items:center;margin-bottom:5px">
+      <span class="sev {{ f.severity.value }}">{{ f.severity.value|upper }}</span>
+      <strong>{{ f.title }}</strong>
+    </div>
+    <div style="font-size:13px">
+      <div><span class="muted">target</span> <code>{{ f.target }}</code></div>
+      <div><span class="muted">tool</span> {{ f.tool }}</div>
+      {% if f.description %}<div><span class="muted">desc</span> {{ f.description }}</div>{% endif %}
+      {% if f.evidence %}<div><span class="muted">evidence</span> <code>{{ f.evidence }}</code></div>{% endif %}
+      {% if f.reference %}<div><span class="muted">ref</span> {{ f.reference }}</div>{% endif %}
+    </div>
+  </div>
+  {% endfor %}
+{% else %}
+  <p class="muted">No findings{% if live %} yet{% endif %}.</p>
+{% endif %}
+
+<h2>Assets <span class="muted">({{ r.assets|length }})</span></h2>
+<div class="card">
+  <table><thead><tr><th>Kind</th><th>Value</th><th>Detail</th><th>Source</th></tr></thead><tbody>
+  {% for a in r.assets %}
+    <tr><td>{{ a.kind }}</td><td><code>{{ a.value }}</code></td>
+      <td class="muted">{% if a.kind == 'url' %}{{ a.metadata.status_code or '' }} {{ a.metadata.title or '' }}{% endif %}</td>
+      <td class="muted">{{ a.source }}</td></tr>
+  {% else %}<tr><td colspan="4" class="muted">none</td></tr>{% endfor %}
+  </tbody></table>
+</div>
+
+<h2>Tool runs</h2>
+<div class="card">
+  <table><thead><tr><th>Stage</th><th>Tool</th><th>Status</th><th>Note</th></tr></thead><tbody>
+  {% for s in r.stages %}
+    <tr><td>{{ s.stage }}</td><td>{{ s.tool }}</td>
+      <td class="s-{{ s.status }}">{{ s.status }}</td>
+      <td class="muted">{{ s.skipped_reason or s.error or '' }}</td></tr>
+  {% else %}<tr><td colspan="4" class="muted">pending</td></tr>{% endfor %}
+  </tbody></table>
+</div>
+
+{% if r.error %}<div class="flash error">Run error: {{ r.error }}</div>{% endif %}
+
+{% endblock %}

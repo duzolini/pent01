@@ -1,0 +1,14 @@
+name: example-engagement
+authorized: false
+client: ""
+authorized_by: ""
+authorization_ref: ""
+expires: ""
+domains:
+  - example.com
+hosts: []
+cidrs: []
+exclude: []
+rate_limit: 50
+max_concurrency: 10
+intrusive: false
