@@ -12,3 +12,4 @@ exclude: []
 rate_limit: 50
 max_concurrency: 10
 intrusive: false
+validate: true

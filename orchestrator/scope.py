@@ -41,6 +41,7 @@ class Scope:
     rate_limit: int = 50  # max requests/sec hint passed to tools
     max_concurrency: int = 10
     intrusive: bool = False  # gate for anything beyond passive/safe checks
+    validate: bool = True  # run safe non-destructive confirmation of findings
 
     _networks: list[ipaddress._BaseNetwork] = field(default_factory=list, repr=False)
     _exclude_networks: list[ipaddress._BaseNetwork] = field(default_factory=list, repr=False)
@@ -48,7 +49,7 @@ class Scope:
     def __post_init__(self) -> None:
         # Validate first so an invalid scope raises ScopeError (not ValueError)
         # regardless of whether it was built via load() or constructed directly.
-        self.validate()
+        self._check_valid()
         self._networks = [ipaddress.ip_network(c, strict=False) for c in self.cidrs]
         self._exclude_networks = []
         for item in self.exclude:
@@ -69,7 +70,7 @@ class Scope:
         known = {
             "name", "authorized", "client", "authorized_by", "authorization_ref",
             "expires", "domains", "hosts", "cidrs", "exclude", "rate_limit",
-            "max_concurrency", "intrusive",
+            "max_concurrency", "intrusive", "validate",
         }
         unknown = set(data) - known
         if unknown:
@@ -88,11 +89,12 @@ class Scope:
             rate_limit=int(data.get("rate_limit", 50)),
             max_concurrency=int(data.get("max_concurrency", 10)),
             intrusive=bool(data.get("intrusive", False)),
+            validate=bool(data.get("validate", True)),
         )
-        scope.validate()
+        scope._check_valid()
         return scope
 
-    def validate(self) -> None:
+    def _check_valid(self) -> None:
         if not self.name:
             raise ScopeError("scope.name is required")
         if not (self.domains or self.hosts or self.cidrs):

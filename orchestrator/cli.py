@@ -42,7 +42,8 @@ _EXAMPLE_SCOPE = textwrap.dedent("""\
     # Safety knobs.
     rate_limit: 50          # req/s hint passed to tools
     max_concurrency: 10
-    intrusive: false        # true enables fuzz/brute/dos nuclei templates
+    intrusive: false        # true enables fuzz/brute/dos templates AND active exploit plans
+    validate: true          # run safe, non-destructive confirmation of findings
     """)
 
 
@@ -109,6 +110,88 @@ def _cmd_scan(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_validate(args: argparse.Namespace) -> int:
+    from . import exploit, validators
+    scope = Scope.load(args.path)
+    result = store.load(args.scan_id)
+    if result is None:
+        print(f"no such scan: {args.scan_id}", file=sys.stderr)
+        return 1
+    print(f"Validating {len(result.findings)} findings against scope '{scope.name}' "
+          "(safe, non-destructive)…")
+
+    def show(f) -> None:
+        v = f.validation
+        mark = {"confirmed": "✔ CONFIRMED", "not_confirmed": "· not confirmed",
+                "skipped": "- skipped", "error": "! error",
+                "unverified": "? no auto-validator"}.get(v.status, v.status)
+        print(f"  [{mark}] {f.title}  ({f.target})")
+        if v.evidence:
+            print(f"        evidence: {v.evidence}")
+
+    confirmed = validators.validate_findings(result, scope, on_each=show)
+    n = exploit.build_plans(result, scope)
+    store.save(result)
+    print(f"\n{confirmed} confirmed. {n} exploit plan(s) proposed — see "
+          f"'orchestrator plans {result.scan_id}'.")
+    return 0
+
+
+def _cmd_plans(args: argparse.Namespace) -> int:
+    result = store.load(args.scan_id)
+    if result is None:
+        print(f"no such scan: {args.scan_id}", file=sys.stderr)
+        return 1
+    if not result.exploit_plans:
+        print("no exploit plans. Run 'validate' first, or no findings are exploitable.")
+        return 0
+    for p in result.exploit_plans:
+        f = result.finding_by_id(p.finding_id)
+        print(f"\n[{p.plan_id}] {p.tool}  — status: {p.status}")
+        print(f"  finding : {f.title if f else p.finding_id}")
+        print(f"  why     : {p.rationale}")
+        print(f"  risk    : {p.risk}")
+        print(f"  command : {p.command_str()}")
+    print("\nTo run one (requires intrusive: true + explicit confirm):")
+    print(f"  orchestrator exploit <scope.yaml> {result.scan_id} <plan_id> --confirm")
+    return 0
+
+
+def _cmd_exploit(args: argparse.Namespace) -> int:
+    from . import exploit
+    scope = Scope.load(args.path)
+    result = store.load(args.scan_id)
+    if result is None:
+        print(f"no such scan: {args.scan_id}", file=sys.stderr)
+        return 1
+    plan = result.plan_by_id(args.plan_id)
+    if plan is None:
+        print(f"no such plan: {args.plan_id}", file=sys.stderr)
+        return 1
+
+    print(f"Plan [{plan.plan_id}] {plan.tool}")
+    print(f"  command: {plan.command_str()}")
+    print(f"  risk   : {plan.risk}")
+    if not args.confirm:
+        print("\nNot executed. Re-run with --confirm to execute "
+              "(scope must also have intrusive: true).")
+        return 0
+    if not scope.intrusive:
+        print("\nRefused: scope is not intrusive. Set 'intrusive: true' only with "
+              "explicit authorization for active exploitation.", file=sys.stderr)
+        return 2
+    # Final interactive gate.
+    typed = input(f"Type the plan id '{plan.plan_id}' to execute: ").strip()
+    if typed != plan.plan_id:
+        print("confirmation mismatch; aborted.")
+        return 1
+    plan = exploit.execute_plan(result, plan.plan_id, scope, confirm=True)
+    store.save(result)
+    print(f"\nstatus: {plan.status}")
+    print(plan.output)
+    return 0 if plan.status == "executed" else 1
+
+
 def _cmd_report(args: argparse.Namespace) -> int:
     result = store.load(args.scan_id)
     if result is None:
@@ -165,6 +248,22 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--yes", action="store_true", help="skip the interactive confirmation")
     s.add_argument("--report", help="also write a report to this file (.html or .md)")
     s.set_defaults(func=_cmd_scan)
+
+    s = sub.add_parser("validate", help="safely confirm a scan's findings (non-destructive)")
+    s.add_argument("path", help="scope file")
+    s.add_argument("scan_id")
+    s.set_defaults(func=_cmd_validate)
+
+    s = sub.add_parser("plans", help="list proposed operator-in-the-loop exploit plans")
+    s.add_argument("scan_id")
+    s.set_defaults(func=_cmd_plans)
+
+    s = sub.add_parser("exploit", help="execute one exploit plan (gated: intrusive + confirm)")
+    s.add_argument("path", help="scope file")
+    s.add_argument("scan_id")
+    s.add_argument("plan_id")
+    s.add_argument("--confirm", action="store_true", help="actually execute (still prompts)")
+    s.set_defaults(func=_cmd_exploit)
 
     s = sub.add_parser("report", help="render a stored scan as a report")
     s.add_argument("scan_id")

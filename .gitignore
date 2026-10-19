@@ -5,3 +5,4 @@ venv/
 data/scans/*.json
 scopes/*.y*ml
 !scopes/example.yaml
+tools_demo/*.html

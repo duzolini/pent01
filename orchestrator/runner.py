@@ -51,6 +51,7 @@ class Runner:
         try:
             for stage in STAGES:
                 self._run_stage(stage, result, tick)
+            self._validate_and_plan(result, tick)
             result.status = "done"
         except Exception as exc:  # noqa: BLE001 - surface any orchestration failure
             result.status = "error"
@@ -101,6 +102,45 @@ class Runner:
             finally:
                 sr.finished_at = time.time()
                 tick()
+
+    def _validate_and_plan(self, result: ScanResult, tick: ProgressCb) -> None:
+        """Safe confirmation of findings, then propose operator-in-the-loop plans."""
+        from . import exploit, validators
+
+        sr = StageResult(stage="validate", tool="safe-validators", status="running",
+                         started_at=time.time())
+        result.stages.append(sr)
+        tick()
+        if not self.scope.validate:
+            sr.status = "skipped"
+            sr.skipped_reason = "validate: false in scope"
+            sr.finished_at = time.time()
+            tick()
+        else:
+            try:
+                confirmed = validators.validate_findings(result, self.scope)
+                sr.status = "ok"
+                sr.command = f"confirmed {confirmed}/{len(result.findings)} findings"
+            except Exception as exc:  # noqa: BLE001
+                sr.status = "error"
+                sr.error = f"{type(exc).__name__}: {exc}"
+            sr.finished_at = time.time()
+            tick()
+
+        # Propose (never execute) exploitation steps for applicable findings.
+        pr = StageResult(stage="plan", tool="exploit-planner", status="running",
+                         started_at=time.time())
+        result.stages.append(pr)
+        tick()
+        try:
+            n = exploit.build_plans(result, self.scope)
+            pr.status = "ok"
+            pr.command = f"{n} exploit plan(s) proposed (operator-in-the-loop)"
+        except Exception as exc:  # noqa: BLE001
+            pr.status = "error"
+            pr.error = f"{type(exc).__name__}: {exc}"
+        pr.finished_at = time.time()
+        tick()
 
     def _targets_for(self, stage: str, result: ScanResult) -> list[str]:
         if stage == "recon":

@@ -35,6 +35,56 @@ Cada ferramenta é **detectada em runtime**: se o binário não estiver no PATH,
 estágio é marcado `skipped` em vez de quebrar o scan. Os checks de **security
 headers** e **TLS** são em Python puro e funcionam sem nenhuma instalação.
 
+## Prova de conceito: validação + exploração operador-no-circuito
+
+Detecção aponta "candidato". Para chegar à **prova**, há duas camadas:
+
+**1. Validação segura (`orchestrator validate`) — automática, não-destrutiva.**
+Confirma o finding sem causar dano e anexa a evidência:
+
+| Classe | Como confirma (read-only) |
+|--------|---------------------------|
+| SQLi | diferencial booleano (`AND 1=1` ~ baseline vs `AND 1=2` difere) |
+| XSS refletido | canary volta **sem** encoding na resposta |
+| LFI / path traversal | lê `/etc/passwd` e casa `root:x:0:0` |
+| Open redirect | `Location:` aponta para host canário |
+| `.git` exposto | `/.git/config` retorna config git válido |
+| Directory listing | resposta contém autoindex `Index of /` |
+| Headers / TLS | recheck ao vivo do header ausente / versão depreciada |
+
+Nada aqui escreve, apaga ou extrai em massa — só confirma.
+
+**2. Exploração ativa (`orchestrator plans` / `exploit`) — operador-no-circuito.**
+Para o que validação segura não prova (RCE, extração de dados, credenciais), o
+sistema **propõe** o comando exato com a ferramenta consagrada, mas **nunca
+executa sozinho**. Executar exige, cumulativamente:
+
+1. escopo com `intrusive: true` (você optou por teste ativo),
+2. confirmação explícita por plano (`--confirm` + digitar o id do plano),
+3. a ferramenta instalada (senão vira comando manual, não roda às cegas),
+4. o alvo ainda em escopo.
+
+```bash
+orchestrator validate scopes/cliente.yaml <SCAN_ID>   # confirma com evidência
+orchestrator plans <SCAN_ID>                           # lista os comandos propostos
+orchestrator exploit scopes/cliente.yaml <SCAN_ID> <PLAN_ID> --confirm
+```
+
+Mapeamentos atuais: SQLi → `sqlmap`, CVE de serviço → `metasploit`,
+credenciais → `hydra`. **Não existe** modo "auto-explorar tudo": exploração que
+pode derrubar o alvo ou alterar dados é decisão humana, por alvo.
+
+### Laboratório local
+
+`tools_demo/vuln_app.py` é um app deliberadamente vulnerável (bind em
+`127.0.0.1`) para você ver a validação confirmando de verdade:
+
+```bash
+python tools_demo/vuln_app.py &                        # alvo local, seu
+python tools_demo/seed_local.py                         # cria findings de exemplo
+orchestrator validate scopes/local-lab.yaml <SCAN_ID>   # confirma 7/9 com evidência
+```
+
 ## Instalação
 
 ```bash

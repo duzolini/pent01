@@ -39,11 +39,18 @@
     <div style="display:flex;gap:10px;align-items:center;margin-bottom:5px">
       <span class="sev {{ f.severity.value }}">{{ f.severity.value|upper }}</span>
       <strong>{{ f.title }}</strong>
+      {% if f.validation %}
+        {% set vs = f.validation.status %}
+        <span class="vbadge {{ 'v-ok' if vs=='confirmed' else ('v-err' if vs=='error' else 'v-mut') }}">
+          {{ '✓ confirmed' if vs=='confirmed' else vs }}</span>
+      {% endif %}
     </div>
     <div style="font-size:13px">
       <div><span class="muted">target</span> <code>{{ f.target }}</code></div>
       <div><span class="muted">tool</span> {{ f.tool }}</div>
       {% if f.description %}<div><span class="muted">desc</span> {{ f.description }}</div>{% endif %}
+      {% if f.validation and (f.validation.evidence or f.validation.detail) %}
+        <div><span class="muted">validation</span> <code>{{ f.validation.evidence or f.validation.detail }}</code></div>{% endif %}
       {% if f.evidence %}<div><span class="muted">evidence</span> <code>{{ f.evidence }}</code></div>{% endif %}
       {% if f.reference %}<div><span class="muted">ref</span> {{ f.reference }}</div>{% endif %}
     </div>
@@ -51,6 +58,24 @@
   {% endfor %}
 {% else %}
   <p class="muted">No findings{% if live %} yet{% endif %}.</p>
+{% endif %}
+
+{% if r.exploit_plans %}
+<h2>Exploit plans <span class="muted">(operador-no-circuito — não executados automaticamente)</span></h2>
+{% for p in r.exploit_plans %}
+<div class="card" style="padding:12px 14px">
+  <div style="display:flex;gap:10px;align-items:center;margin-bottom:5px">
+    <span class="sev" style="background:#444c56">{{ p.tool }}</span>
+    <strong>{% set fnd = r.finding_by_id(p.finding_id) %}{{ fnd.title if fnd else p.finding_id }}</strong>
+    <span class="vbadge v-mut">{{ p.status }}</span>
+  </div>
+  <div style="font-size:13px">
+    <div><span class="muted">why</span> {{ p.rationale }}</div>
+    <div><span class="muted">risk</span> {{ p.risk }}</div>
+    <div><span class="muted">command</span> <code>{{ p.command_str() }}</code></div>
+  </div>
+</div>
+{% endfor %}
 {% endif %}
 
 <h2>Assets <span class="muted">({{ r.assets|length }})</span></h2>

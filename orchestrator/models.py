@@ -50,6 +50,25 @@ class Asset:
 
 
 @dataclass
+class Validation:
+    """Result of a safe, non-destructive attempt to confirm a finding."""
+
+    status: str = "unverified"  # unverified|confirmed|not_confirmed|error|skipped
+    method: str = ""            # what probe was used
+    evidence: str = ""          # short proof string (e.g. extracted banner / diff)
+    detail: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return dataclasses.asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any] | None) -> "Validation | None":
+        if not d:
+            return None
+        return cls(**{k: d.get(k, "") for k in ("status", "method", "evidence", "detail")})
+
+
+@dataclass
 class Finding:
     """A single observation worth a human's attention."""
 
@@ -61,17 +80,20 @@ class Finding:
     evidence: str = ""
     reference: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
+    validation: Validation | None = None
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
 
     def to_dict(self) -> dict[str, Any]:
         d = dataclasses.asdict(self)
         d["severity"] = self.severity.value
+        d["validation"] = self.validation.to_dict() if self.validation else None
         return d
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "Finding":
         d = dict(d)
         d["severity"] = Severity.coerce(d.get("severity"))
+        d["validation"] = Validation.from_dict(d.get("validation"))
         return cls(**d)
 
 
@@ -97,6 +119,38 @@ class StageResult:
 
 
 @dataclass
+class ExploitPlan:
+    """An operator-in-the-loop exploitation step.
+
+    A plan is *proposed* automatically for a confirmed finding, but it is never
+    executed automatically: running it requires an intrusive-enabled scope plus
+    an explicit per-plan confirmation. The plan carries the exact command so the
+    operator can review (or run) it themselves.
+    """
+
+    finding_id: str
+    tool: str                       # sqlmap|hydra|metasploit|curl|manual
+    command: list[str] = field(default_factory=list)
+    rationale: str = ""
+    risk: str = ""                  # what could go wrong if run
+    requires_intrusive: bool = True
+    status: str = "proposed"        # proposed|executed|declined|error|unavailable
+    output: str = ""
+    plan_id: str = field(default_factory=lambda: uuid.uuid4().hex[:10])
+
+    def command_str(self) -> str:
+        import shlex
+        return " ".join(shlex.quote(c) for c in self.command)
+
+    def to_dict(self) -> dict[str, Any]:
+        return dataclasses.asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "ExploitPlan":
+        return cls(**d)
+
+
+@dataclass
 class ScanResult:
     """Everything produced by one orchestration run."""
 
@@ -109,6 +163,7 @@ class ScanResult:
     assets: list[Asset] = field(default_factory=list)
     findings: list[Finding] = field(default_factory=list)
     stages: list[StageResult] = field(default_factory=list)
+    exploit_plans: list[ExploitPlan] = field(default_factory=list)
     authorization: dict[str, Any] = field(default_factory=dict)
     error: str = ""
 
@@ -119,6 +174,12 @@ class ScanResult:
 
     def add_finding(self, finding: Finding) -> None:
         self.findings.append(finding)
+
+    def finding_by_id(self, fid: str) -> Finding | None:
+        return next((f for f in self.findings if f.id == fid), None)
+
+    def plan_by_id(self, pid: str) -> ExploitPlan | None:
+        return next((p for p in self.exploit_plans if p.plan_id == pid), None)
 
     def assets_of(self, kind: str) -> list[Asset]:
         return [a for a in self.assets if a.kind == kind]
@@ -144,6 +205,7 @@ class ScanResult:
             "assets": [a.to_dict() for a in self.assets],
             "findings": [f.to_dict() for f in self.findings],
             "stages": [s.to_dict() for s in self.stages],
+            "exploit_plans": [p.to_dict() for p in self.exploit_plans],
             "authorization": self.authorization,
             "error": self.error,
         }
@@ -163,6 +225,7 @@ class ScanResult:
             assets=[Asset(**a) for a in d.get("assets", [])],
             findings=[Finding.from_dict(f) for f in d.get("findings", [])],
             stages=[StageResult.from_dict(s) for s in d.get("stages", [])],
+            exploit_plans=[ExploitPlan.from_dict(p) for p in d.get("exploit_plans", [])],
             authorization=d.get("authorization", {}),
             error=d.get("error", ""),
         )

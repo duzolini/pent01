@@ -50,18 +50,33 @@ def to_markdown(r: ScanResult) -> str:
     if not r.findings:
         lines.append("_No findings recorded._")
     for f in r.sorted_findings():
+        vtag = f" — _{f.validation.status}_" if f.validation else ""
         lines += [
-            f"### [{f.severity.value.upper()}] {f.title}",
+            f"### [{f.severity.value.upper()}] {f.title}{vtag}",
             f"- **Target:** `{f.target}`",
             f"- **Tool:** {f.tool}",
         ]
         if f.description:
             lines.append(f"- **Description:** {f.description}")
+        if f.validation and (f.validation.evidence or f.validation.detail):
+            lines.append(f"- **Validation:** `{f.validation.evidence or f.validation.detail}`")
         if f.evidence:
             lines.append(f"- **Evidence:** `{f.evidence}`")
         if f.reference:
             lines.append(f"- **Reference:** {f.reference}")
         lines.append("")
+
+    if r.exploit_plans:
+        lines += ["## Exploit plans (operator-in-the-loop)", ""]
+        for p in r.exploit_plans:
+            fnd = r.finding_by_id(p.finding_id)
+            lines += [
+                f"### {p.tool} — {fnd.title if fnd else p.finding_id} ({p.status})",
+                f"- **Why:** {p.rationale}",
+                f"- **Risk:** {p.risk}",
+                f"- **Command:** `{p.command_str()}`",
+                "",
+            ]
 
     lines += ["## Assets", ""]
     for kind in ("subdomain", "host", "service", "url"):
@@ -96,25 +111,53 @@ def to_html(r: ScanResult) -> str:
         for s in reversed(list(Severity))
     )
 
+    _VCOLOR = {"confirmed": "#2e7d32", "not_confirmed": "#5b6470", "skipped": "#5b6470",
+               "error": "#b4232a", "unverified": "#8a8f98"}
     finding_rows = ""
     for f in r.sorted_findings():
+        v = f.validation
+        vbadge = ""
+        vevidence = ""
+        if v:
+            vbadge = (f'<span class="vbadge" style="background:{_VCOLOR.get(v.status, "#5b6470")}">'
+                      f'{"✓ confirmed" if v.status == "confirmed" else e(v.status)}</span>')
+            proof = v.evidence or v.detail
+            if proof:
+                vevidence = f'<div><span class="label">Validation</span> <code>{e(proof)}</code></div>'
         finding_rows += f"""
         <div class="finding sev-{f.severity.value}">
           <div class="finding-head">
             <span class="sev-badge" style="background:{_SEV_COLOR[f.severity.value]}">
               {f.severity.value.upper()}</span>
             <strong>{e(f.title)}</strong>
+            {vbadge}
           </div>
           <div class="finding-body">
             <div><span class="label">Target</span> <code>{e(f.target)}</code></div>
             <div><span class="label">Tool</span> {e(f.tool)}</div>
             {f'<div><span class="label">Description</span> {e(f.description)}</div>' if f.description else ''}
+            {vevidence}
             {f'<div><span class="label">Evidence</span> <code>{e(f.evidence)}</code></div>' if f.evidence else ''}
             {f'<div><span class="label">Reference</span> {e(f.reference)}</div>' if f.reference else ''}
           </div>
         </div>"""
     if not r.findings:
         finding_rows = '<p class="muted">No findings recorded.</p>'
+
+    plan_rows = ""
+    for p in r.exploit_plans:
+        fnd = r.finding_by_id(p.finding_id)
+        plan_rows += f"""
+        <div class="finding">
+          <div class="finding-head"><span class="sev-badge" style="background:#444c56">{e(p.tool)}</span>
+            <strong>{e(fnd.title if fnd else p.finding_id)}</strong>
+            <span class="vbadge" style="background:#5b6470">{e(p.status)}</span></div>
+          <div class="finding-body">
+            <div><span class="label">Why</span> {e(p.rationale)}</div>
+            <div><span class="label">Risk</span> {e(p.risk)}</div>
+            <div><span class="label">Command</span> <code>{e(p.command_str())}</code></div>
+          </div>
+        </div>"""
 
     asset_blocks = ""
     for kind in ("subdomain", "host", "service", "url"):
@@ -167,6 +210,7 @@ h3 {{ font-size:14px; margin:18px 0 6px; }}
 .sev-info {{ border-left-color:{_SEV_COLOR['info']}; }}
 .finding-head {{ display:flex; align-items:center; gap:10px; margin-bottom:6px; }}
 .sev-badge {{ color:#fff; font-size:11px; font-weight:700; padding:2px 8px; border-radius:4px; }}
+.vbadge {{ color:#fff; font-size:11px; font-weight:600; padding:2px 8px; border-radius:10px; }}
 .finding-body div {{ margin:2px 0; font-size:13.5px; }}
 code {{ background:rgba(127,127,127,.14); padding:1px 5px; border-radius:4px; font-size:12.5px; }}
 table {{ width:100%; border-collapse:collapse; margin:4px 0 8px; }}
@@ -184,6 +228,8 @@ td {{ padding:5px 8px; border-bottom:1px solid var(--line); font-size:13px; vert
 
   <h2>Findings</h2>
   {finding_rows}
+
+  {f'<h2>Exploit plans <span class="muted">(operator-in-the-loop)</span></h2>{plan_rows}' if r.exploit_plans else ''}
 
   <h2>Assets <span class="muted">({len(r.assets)})</span></h2>
   <div class="card">{asset_blocks or '<p class="muted">None.</p>'}</div>
