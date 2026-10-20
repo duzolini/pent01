@@ -112,9 +112,14 @@ def create_app() -> Flask:
         live = result.status == "running"
         scope = _scope_for(result)
         validated = any(f.validation for f in result.findings)
+        prev = store.previous_scan(result)
+        scandiff = None
+        if prev and not live:
+            from .. import diff as diffmod
+            scandiff = diffmod.diff_scans(prev, result)
         return render_template("scan.html", r=result, live=live,
                                intrusive=bool(scope and scope.intrusive),
-                               validated=validated)
+                               validated=validated, diff=scandiff)
 
     @app.route("/scan/<scan_id>/validate", methods=["POST"])
     def validate(scan_id: str):

@@ -89,6 +89,19 @@ def ssrf_canary():
     return "ssrf0canary0marker"
 
 
+@app.route("/fetch-blind")
+def fetch_blind():
+    # BLIND SSRF: fetches the attacker URL server-side but returns nothing
+    # useful — only an out-of-band listener can confirm it.
+    import urllib.request
+    url = request.args.get("url", "")
+    try:
+        urllib.request.urlopen(url, timeout=5).read(100)
+    except Exception:  # noqa: BLE001
+        pass
+    return Response("queued", mimetype="text/plain")
+
+
 @app.route("/fetch")
 def fetch():
     # SSRF: fetches an attacker-supplied URL server-side and returns the body.

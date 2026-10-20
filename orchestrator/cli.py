@@ -44,6 +44,7 @@ _EXAMPLE_SCOPE = textwrap.dedent("""\
     max_concurrency: 10
     intrusive: false        # true enables fuzz/brute/dos templates AND active exploit plans
     validate: true          # run safe, non-destructive confirmation of findings
+    oob_url: ""             # base URL of your OOB listener (for blind SSRF/XSS), e.g. http://1.2.3.4:8081
     """)
 
 
@@ -192,6 +193,51 @@ def _cmd_exploit(args: argparse.Namespace) -> int:
     return 0 if plan.status == "executed" else 1
 
 
+def _cmd_diff(args: argparse.Namespace) -> int:
+    from . import diff
+    old = store.load(args.old)
+    new = store.load(args.new)
+    if old is None or new is None:
+        print("one or both scan ids not found", file=sys.stderr)
+        return 1
+    print(diff.render(diff.diff_scans(old, new)))
+    return 0
+
+
+def _cmd_watch(args: argparse.Namespace) -> int:
+    import time
+    from . import diff
+    scope = Scope.load(args.path)
+    try:
+        scope.require_authorized()
+    except ScopeError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    print(f"Watching scope '{scope.name}' every {args.interval}s "
+          f"({'unlimited' if args.max_runs == 0 else args.max_runs} runs). Ctrl-C to stop.")
+    run = 0
+    try:
+        while args.max_runs == 0 or run < args.max_runs:
+            run += 1
+            prev = store.scans_for_scope(scope.name)
+            prev = prev[0] if prev else None
+            print(f"\n[run {run}] starting scan…")
+            result = Runner(scope).run()
+            if prev:
+                d = diff.diff_scans(prev, result)
+                print(diff.render(d))
+                if d.new_findings:
+                    print(f"\n⚠ ALERT: {len(d.new_findings)} new finding(s) since last scan.")
+            else:
+                print(f"baseline scan {result.scan_id}: {len(result.findings)} findings.")
+            if args.max_runs != 0 and run >= args.max_runs:
+                break
+            time.sleep(args.interval)
+    except KeyboardInterrupt:
+        print("\nstopped.")
+    return 0
+
+
 def _cmd_report(args: argparse.Namespace) -> int:
     result = store.load(args.scan_id)
     if result is None:
@@ -217,6 +263,22 @@ def _cmd_list(_args: argparse.Namespace) -> int:
         print(f"{s.scan_id}  {s.scope_name:24s} {s.status:8s} "
               f"findings={len(s.findings):<3d} (H{c['high']}/M{c['medium']}) "
               f"assets={len(s.assets)}")
+    return 0
+
+
+def _cmd_oob_listen(args: argparse.Namespace) -> int:
+    from .oob import OobListener, DEFAULT_LOG
+    base = args.base_url or f"http://{args.host}:{args.port}"
+    listener = OobListener(host=args.host, port=args.port)
+    print(f"OOB listener on {args.host}:{args.port}")
+    print(f"  base URL (put this in your scope's oob_url): {base}")
+    print(f"  interactions logged to: {DEFAULT_LOG}")
+    print("  waiting for callbacks… (Ctrl-C to stop)")
+    try:
+        listener.serve_forever()
+    except KeyboardInterrupt:
+        listener.shutdown()
+        print("\nstopped.")
     return 0
 
 
@@ -265,6 +327,17 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--confirm", action="store_true", help="actually execute (still prompts)")
     s.set_defaults(func=_cmd_exploit)
 
+    s = sub.add_parser("diff", help="compare two scans (new / resolved findings)")
+    s.add_argument("old")
+    s.add_argument("new")
+    s.set_defaults(func=_cmd_diff)
+
+    s = sub.add_parser("watch", help="continuous assessment: rescan on an interval and diff")
+    s.add_argument("path", help="scope file")
+    s.add_argument("--interval", type=int, default=3600, help="seconds between runs")
+    s.add_argument("--max-runs", type=int, default=0, help="stop after N runs (0 = unlimited)")
+    s.set_defaults(func=_cmd_watch)
+
     s = sub.add_parser("report", help="render a stored scan as a report")
     s.add_argument("scan_id")
     s.add_argument("--format", choices=["html", "md"], default="html")
@@ -273,6 +346,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("list", help="list stored scans")
     s.set_defaults(func=_cmd_list)
+
+    s = sub.add_parser("oob-listen", help="run the out-of-band listener for blind vuln confirmation")
+    s.add_argument("--host", default="0.0.0.0")
+    s.add_argument("--port", type=int, default=8081)
+    s.add_argument("--base-url", help="public URL the target can reach (default http://host:port)")
+    s.set_defaults(func=_cmd_oob_listen)
 
     s = sub.add_parser("serve", help="run the web dashboard")
     s.add_argument("--host", default="127.0.0.1")

@@ -42,6 +42,7 @@ class Scope:
     max_concurrency: int = 10
     intrusive: bool = False  # gate for anything beyond passive/safe checks
     validate: bool = True  # run safe non-destructive confirmation of findings
+    oob_url: str = ""  # base URL of your OOB listener, reachable by the target
 
     _networks: list[ipaddress._BaseNetwork] = field(default_factory=list, repr=False)
     _exclude_networks: list[ipaddress._BaseNetwork] = field(default_factory=list, repr=False)
@@ -70,7 +71,7 @@ class Scope:
         known = {
             "name", "authorized", "client", "authorized_by", "authorization_ref",
             "expires", "domains", "hosts", "cidrs", "exclude", "rate_limit",
-            "max_concurrency", "intrusive", "validate",
+            "max_concurrency", "intrusive", "validate", "oob_url",
         }
         unknown = set(data) - known
         if unknown:
@@ -90,6 +91,7 @@ class Scope:
             max_concurrency=int(data.get("max_concurrency", 10)),
             intrusive=bool(data.get("intrusive", False)),
             validate=bool(data.get("validate", True)),
+            oob_url=str(data.get("oob_url", "")),
         )
         scope._check_valid()
         return scope

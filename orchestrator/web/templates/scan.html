@@ -29,6 +29,26 @@
 </div>
 {% endif %}
 
+{% if diff %}
+<h2>Changes since previous scan <span class="muted">({{ diff.summary() }})</span></h2>
+<div class="card">
+  {% if diff.new_findings %}
+    <h3 style="color:var(--err)">New findings</h3>
+    {% for f in diff.new_findings %}
+      <div style="font-size:13px"><span class="sev {{ f.severity.value }}">{{ f.severity.value|upper }}</span>
+        {{ f.title }} <code>{{ f.target }}</code></div>
+    {% endfor %}
+  {% endif %}
+  {% if diff.resolved_findings %}
+    <h3 style="color:var(--ok)">Resolved</h3>
+    {% for f in diff.resolved_findings %}
+      <div class="muted" style="font-size:13px">✓ {{ f.title }} <code>{{ f.target }}</code></div>
+    {% endfor %}
+  {% endif %}
+  {% if not diff.changed %}<p class="muted">No changes since the previous scan.</p>{% endif %}
+</div>
+{% endif %}
+
 <h3>Findings by severity</h3>
 <div class="card">
   {% set c = r.severity_counts() %}

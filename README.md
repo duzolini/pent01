@@ -84,6 +84,35 @@ escopo é `intrusive: true`, cada plano ganha um botão **Execute** que exige
 digitar o id do plano para confirmar — os mesmos gates da CLI, aplicados no
 backend.
 
+### Confirmação de vulns cegas (OOB)
+
+SSRF cego, XSS armazenado/cego e RCE out-of-band não dão resposta observável. A
+forma de confirmar é fazer o alvo **chamar de volta** um listener que você
+controla. O sistema traz um listener embutido (estilo interactsh/Collaborator):
+
+```bash
+# na sua máquina com interface roteável pelo alvo:
+python -m orchestrator oob-listen --host 0.0.0.0 --port 8081 --base-url http://SEU_IP:8081
+```
+
+Coloque esse `base-url` no escopo (`oob_url: http://SEU_IP:8081`). Os validators
+de SSRF/blind-XSS plantam `oob_url/<token>` no ponto suspeito e aguardam o
+callback; se chegar uma requisição com o token, a vuln cega é **confirmada**
+(com o IP de origem como evidência). O listener é passivo — só registra.
+
+## Assessment contínuo
+
+Reexecute um escopo periodicamente e veja o que mudou entre as rodadas:
+
+```bash
+orchestrator diff <SCAN_ANTIGO> <SCAN_NOVO>   # novo / resolvido / inalterado + assets novos
+orchestrator watch scopes/cliente.yaml --interval 3600 --max-runs 0
+```
+
+`watch` roda o pipeline no intervalo dado e, a cada rodada, faz diff contra a
+anterior do mesmo escopo, **alertando** quando surgem findings novos. No
+dashboard, a tela do scan mostra um painel "Changes since previous scan".
+
 ### Laboratório local
 
 `tools_demo/vuln_app.py` é um app deliberadamente vulnerável (bind em

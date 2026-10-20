@@ -36,3 +36,15 @@ def list_scans() -> list[ScanResult]:
         except (json.JSONDecodeError, KeyError):
             continue
     return sorted(scans, key=lambda s: s.created_at, reverse=True)
+
+
+def scans_for_scope(scope_name: str) -> list[ScanResult]:
+    """All scans for a scope, newest first."""
+    return [s for s in list_scans() if s.scope_name == scope_name]
+
+
+def previous_scan(result: ScanResult) -> ScanResult | None:
+    """The most recent completed scan of the same scope before ``result``."""
+    prior = [s for s in scans_for_scope(result.scope_name)
+             if s.scan_id != result.scan_id and s.created_at < result.created_at]
+    return prior[0] if prior else None
