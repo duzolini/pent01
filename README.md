@@ -169,9 +169,20 @@ orchestrator validate scopes/local-lab.yaml <SCAN_ID>   # confirma 7/9 com evid�
 
 ## Instalação
 
+Use um virtualenv (recomendado, e obrigatório no Kali/Debian por causa do
+PEP 668 "externally-managed-environment"):
+
 ```bash
+python3 -m venv .venv
+source .venv/bin/activate        # reative sempre que for usar; sai com `deactivate`
 pip install -r requirements.txt
+python -m orchestrator serve     # dashboard em http://127.0.0.1:8000
 ```
+
+No Kali, se faltar o módulo venv: `sudo apt install python3-full`. Alternativas
+sem venv: `sudo apt install python3-flask python3-yaml` (usa os pacotes do Kali,
+precisa de Flask 3.x), ou — último recurso, pode quebrar o Python do sistema —
+`pip install -r requirements.txt --break-system-packages`.
 
 Ferramentas externas (opcionais, mas recomendadas) — instale na sua máquina de
 pentest. Projeto ProjectDiscovery:
