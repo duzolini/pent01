@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block body %}
+{% set s = scope or {} %}
+<h2>{{ 'Edit scope' if filename else 'New scope' }}</h2>
+
+<div class="banner">Set <code>authorized</code> ON only when you hold written permission to test
+every target below. Scans refuse to run otherwise. <code>intrusive</code> additionally enables
+active exploitation; leave it OFF unless active testing is authorized.</div>
+
+<form method="post" class="card">
+  {% if not filename %}
+  <label>File name</label>
+  <input name="filename" placeholder="cliente.yaml" required
+         style="width:100%;padding:8px;border-radius:7px;border:1px solid var(--line);background:var(--card);color:var(--ink)">
+  {% endif %}
+
+  <label>Scope name</label>
+  <input name="name" value="{{ s.name or '' }}" required
+         style="width:100%;padding:8px;border-radius:7px;border:1px solid var(--line);background:var(--card);color:var(--ink)">
+
+  <div class="check"><input type="checkbox" name="authorized" id="a" {{ 'checked' if s.authorized }}>
+    <label for="a" style="margin:0">Authorized — I hold written permission to test these targets</label></div>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+    <div><label>Client</label><input name="client" value="{{ s.client or '' }}" style="width:100%;padding:8px;border-radius:7px;border:1px solid var(--line);background:var(--card);color:var(--ink)"></div>
+    <div><label>Authorized by</label><input name="authorized_by" value="{{ s.authorized_by or '' }}" style="width:100%;padding:8px;border-radius:7px;border:1px solid var(--line);background:var(--card);color:var(--ink)"></div>
+    <div><label>Authorization ref (contract/ticket)</label><input name="authorization_ref" value="{{ s.authorization_ref or '' }}" style="width:100%;padding:8px;border-radius:7px;border:1px solid var(--line);background:var(--card);color:var(--ink)"></div>
+    <div><label>Expires</label><input name="expires" value="{{ s.expires or '' }}" placeholder="2026-12-31" style="width:100%;padding:8px;border-radius:7px;border:1px solid var(--line);background:var(--card);color:var(--ink)"></div>
+  </div>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:8px">
+    <div><label>Domains (one per line)</label><textarea name="domains" rows="3" style="width:100%;padding:8px;border-radius:7px;border:1px solid var(--line);background:var(--card);color:var(--ink);font-family:monospace">{{ (s.domains or [])|join('\n') }}</textarea></div>
+    <div><label>Hosts / IPs</label><textarea name="hosts" rows="3" style="width:100%;padding:8px;border-radius:7px;border:1px solid var(--line);background:var(--card);color:var(--ink);font-family:monospace">{{ (s.hosts or [])|join('\n') }}</textarea></div>
+    <div><label>CIDRs</label><textarea name="cidrs" rows="2" style="width:100%;padding:8px;border-radius:7px;border:1px solid var(--line);background:var(--card);color:var(--ink);font-family:monospace">{{ (s.cidrs or [])|join('\n') }}</textarea></div>
+    <div><label>Exclude (wins over all)</label><textarea name="exclude" rows="2" style="width:100%;padding:8px;border-radius:7px;border:1px solid var(--line);background:var(--card);color:var(--ink);font-family:monospace">{{ (s.exclude or [])|join('\n') }}</textarea></div>
+  </div>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-top:8px">
+    <div><label>Rate limit (req/s)</label><input name="rate_limit" type="number" value="{{ s.rate_limit or 50 }}" style="width:100%;padding:8px;border-radius:7px;border:1px solid var(--line);background:var(--card);color:var(--ink)"></div>
+    <div><label>Max concurrency</label><input name="max_concurrency" type="number" value="{{ s.max_concurrency or 10 }}" style="width:100%;padding:8px;border-radius:7px;border:1px solid var(--line);background:var(--card);color:var(--ink)"></div>
+    <div><label>OOB listener URL</label><input name="oob_url" value="{{ s.oob_url or '' }}" placeholder="http://your-ip:8081" style="width:100%;padding:8px;border-radius:7px;border:1px solid var(--line);background:var(--card);color:var(--ink)"></div>
+  </div>
+
+  <div class="check"><input type="checkbox" name="validate" id="v" {{ 'checked' if (s.validate is not defined or s.validate) }}>
+    <label for="v" style="margin:0">Run safe validation of findings automatically</label></div>
+  <div class="check"><input type="checkbox" name="intrusive" id="i" {{ 'checked' if s.intrusive }}>
+    <label for="i" style="margin:0">Intrusive — allow active exploitation (authorized engagements only)</label></div>
+
+  <button class="btn" type="submit" style="margin-top:12px">Save scope</button>
+  <a class="btn secondary" href="{{ url_for('scopes_page') }}">Cancel</a>
+</form>
+{% endblock %}

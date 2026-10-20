@@ -60,6 +60,22 @@ def go():
     return redirect(request.args.get("next", "/"), code=302)
 
 
+@app.route("/admin")
+def admin():
+    # Broken access control: sensitive page served with no authentication.
+    return "<h1>Admin panel</h1><p>user management</p>"
+
+
+@app.route("/ping")
+def ping():
+    # Command injection: user input flows into a shell command.
+    import subprocess
+    host = request.args.get("host", "127.0.0.1")
+    out = subprocess.run(f"echo pinging {host}", shell=True,  # noqa: S602 - intentional
+                         capture_output=True, text=True, timeout=10)
+    return Response(out.stdout, mimetype="text/plain")
+
+
 @app.route("/.git/config")
 def git_config():
     return Response("[core]\n\trepositoryformatversion = 0\n\tbare = false\n"

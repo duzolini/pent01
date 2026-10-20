@@ -157,16 +157,43 @@ python -m orchestrator list
 python -m orchestrator report <SCAN_ID> --format html -o relatorio.html
 ```
 
-## Uso — dashboard web
+## Uso — dashboard web (faz tudo, sem comandos)
 
 ```bash
 python -m orchestrator serve           # http://127.0.0.1:8000
 ```
 
-Escolha um escopo autorizado, marque a confirmação de autorização, e dispare.
-A página do scan atualiza sozinha enquanto roda e linka o relatório HTML/Markdown.
+O dashboard cobre o fluxo inteiro — não é preciso rodar comando nenhum:
+
+- **Scopes** — criar, editar e apagar escopos por formulário (sem mexer no YAML).
+- **Scans** — disparar scan (com confirmação de autorização), acompanhar ao vivo.
+- **Scan** — botão **Validate findings**, tabela **OWASP Top 10**, painel
+  "Changes since previous scan", relatório HTML/MD, e botão **Execute** por plano
+  de exploração (aparece só com escopo `intrusive`, exige digitar o id do plano).
+- **Diff** — comparar quaisquer dois scans.
+- **Continuous** — ligar/desligar assessment recorrente (roda dentro do dashboard).
+- **OOB** — ligar/desligar o listener out-of-band e ver os callbacks recebidos.
+
 O servidor sobe em `localhost` de propósito — é um console de operador, não um
-serviço público.
+serviço público. (Os mesmos gates de autorização da CLI valem nas rotas web.)
+
+## Cobertura OWASP Top 10 (2021)
+
+Cada finding é mapeado para uma categoria OWASP, e o relatório/dashboard mostram
+a cobertura por categoria (quantos achados, quantos confirmados):
+
+| Cat | Validadores que confirmam |
+|-----|---------------------------|
+| A01 Broken Access Control | acesso sem auth, LFI/path traversal, open redirect |
+| A02 Cryptographic Failures | TLS depreciado, HSTS, JWT fraco (`alg:none`/secret) |
+| A03 Injection | SQLi, XSS refletido/cego, **command injection (RCE via OOB)** |
+| A05 Security Misconfiguration | `.git`, directory listing, headers, CORS |
+| A07 Identification & Auth | credenciais padrão/fracas (via plano hydra) |
+| A10 SSRF | SSRF refletido e cego (via OOB) |
+
+A04/A06/A08/A09 aparecem na matriz como "sem validador automático" quando não há
+checagem segura aplicável — honestidade sobre o que foi e o que não foi testado.
+Command injection executa comando no alvo, então exige `intrusive: true` + `oob_url`.
 
 ## Formato do escopo
 

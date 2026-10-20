@@ -48,7 +48,13 @@ label{display:block;font-size:13px;margin:10px 0 4px} select{width:100%;padding:
   <h1>🛡️ Assessment Orchestrator</h1>
   <span class="tag">authorized engagements only</span>
   <span style="flex:1"></span>
-  <a href="{{ url_for('index') }}">Home</a>
+  <nav style="display:flex;gap:14px">
+    <a href="{{ url_for('index') }}">Scans</a>
+    <a href="{{ url_for('scopes_page') }}">Scopes</a>
+    <a href="{{ url_for('diff_page') }}">Diff</a>
+    <a href="{{ url_for('watch_page') }}">Continuous</a>
+    <a href="{{ url_for('oob_page') }}">OOB</a>
+  </nav>
 </header>
 <div class="wrap">
   {% with msgs = get_flashed_messages(with_categories=true) %}

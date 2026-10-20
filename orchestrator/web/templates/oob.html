@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block head %}<meta http-equiv="refresh" content="8">{% endblock %}
+{% block body %}
+<h2>Out-of-band listener <span class="muted">(blind SSRF / XSS confirmation)</span></h2>
+
+<div class="banner">The listener records callbacks from targets. Its URL must be reachable by the
+target, so for a real engagement run the dashboard on a routable host and set that URL as
+<code>oob_url</code> in the scope. Here it is bound on 0.0.0.0.</div>
+
+<div class="card">
+  {% if running %}
+    <p>Status: <span class="pill yes">running</span> on port <code>{{ port }}</code></p>
+    <form method="post" action="{{ url_for('oob_stop') }}">
+      <button class="btn" style="background:var(--err)">Stop listener</button>
+    </form>
+  {% else %}
+    <p>Status: <span class="pill no">stopped</span></p>
+    <form method="post" action="{{ url_for('oob_start') }}" style="display:flex;gap:8px;align-items:center">
+      <label style="margin:0">Port</label>
+      <input name="port" value="8081" style="width:90px;padding:6px 8px;border-radius:6px;border:1px solid var(--line);background:var(--card);color:var(--ink)">
+      <button class="btn" type="submit">Start listener</button>
+    </form>
+  {% endif %}
+</div>
+
+<h3>Recent interactions ({{ interactions|length }})</h3>
+<div class="card">
+  <table><thead><tr><th>When</th><th>Token</th><th>From</th><th>Method</th><th>Path</th><th>UA</th></tr></thead><tbody>
+  {% for i in interactions %}
+    <tr><td class="muted">{{ i.ts|round(0)|int }}</td><td><code>{{ i.token[:12] }}</code></td>
+      <td><code>{{ i.src_ip }}</code></td><td>{{ i.method }}</td>
+      <td class="muted">{{ i.path }}</td><td class="muted">{{ i.user_agent[:40] }}</td></tr>
+  {% else %}<tr><td colspan="6" class="muted">no callbacks received yet</td></tr>{% endfor %}
+  </tbody></table>
+</div>
+{% endblock %}

@@ -11,11 +11,13 @@ from __future__ import annotations
 import threading
 from pathlib import Path
 
+import yaml
 from flask import (Flask, abort, flash, redirect, render_template,
                    request, url_for, Response)
 
 from .. import report, store
 from ..runner import Runner
+from ..scheduler import Scheduler
 from ..scope import Scope, ScopeError
 
 SCOPES_DIR = Path(__file__).resolve().parents[2] / "scopes"
@@ -23,6 +25,52 @@ SCOPES_DIR = Path(__file__).resolve().parents[2] / "scopes"
 # Track running scans so the UI can show live status without a job queue.
 _running: dict[str, threading.Thread] = {}
 _lock = threading.Lock()
+
+# Continuous-assessment scheduler and OOB listener, both managed from the UI.
+_scheduler = Scheduler()
+_oob: dict[str, object] = {"listener": None, "thread": None, "port": None}
+
+
+def _list_field(raw: str) -> list[str]:
+    """Split a textarea/CSV field into a clean list."""
+    items: list[str] = []
+    for chunk in (raw or "").replace(",", "\n").splitlines():
+        v = chunk.strip()
+        if v:
+            items.append(v)
+    return items
+
+
+def _write_scope(filename: str, form) -> Path:
+    """Build a scope YAML from submitted form fields and write it."""
+    if not filename.endswith((".yaml", ".yml")):
+        filename += ".yaml"
+    # Keep the filename safe — no path traversal.
+    filename = Path(filename).name
+    data = {
+        "name": (form.get("name") or Path(filename).stem).strip(),
+        "authorized": form.get("authorized") == "on",
+        "client": form.get("client", "").strip(),
+        "authorized_by": form.get("authorized_by", "").strip(),
+        "authorization_ref": form.get("authorization_ref", "").strip(),
+        "expires": form.get("expires", "").strip(),
+        "domains": _list_field(form.get("domains", "")),
+        "hosts": _list_field(form.get("hosts", "")),
+        "cidrs": _list_field(form.get("cidrs", "")),
+        "exclude": _list_field(form.get("exclude", "")),
+        "rate_limit": int(form.get("rate_limit") or 50),
+        "max_concurrency": int(form.get("max_concurrency") or 10),
+        "intrusive": form.get("intrusive") == "on",
+        "validate": form.get("validate") == "on",
+        "oob_url": form.get("oob_url", "").strip(),
+    }
+    # Validate before writing so the UI can reject bad input.
+    Scope(name=data["name"], authorized=data["authorized"], domains=data["domains"],
+          hosts=data["hosts"], cidrs=data["cidrs"])
+    path = SCOPES_DIR / filename
+    SCOPES_DIR.mkdir(exist_ok=True)
+    path.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True))
+    return path
 
 
 def _discover_scopes() -> list[Path]:
@@ -117,9 +165,12 @@ def create_app() -> Flask:
         if prev and not live:
             from .. import diff as diffmod
             scandiff = diffmod.diff_scans(prev, result)
+        from .. import owasp
         return render_template("scan.html", r=result, live=live,
                                intrusive=bool(scope and scope.intrusive),
-                               validated=validated, diff=scandiff)
+                               validated=validated, diff=scandiff,
+                               owasp_rows=owasp.coverage(result),
+                               owasp_cats=owasp.CATEGORIES)
 
     @app.route("/scan/<scan_id>/validate", methods=["POST"])
     def validate(scan_id: str):
@@ -179,4 +230,148 @@ def create_app() -> Flask:
             abort(404)
         return Response(report.to_markdown(result), mimetype="text/plain")
 
+    # ---- Scope management (no YAML editing by hand) ----
+    @app.route("/scopes")
+    def scopes_page():
+        rows = []
+        for p in _discover_scopes():
+            try:
+                s = Scope.load(p)
+                rows.append({"path": p.name, "name": s.name, "authorized": s.authorized,
+                             "targets": ", ".join(s.seed_targets()), "intrusive": s.intrusive})
+            except ScopeError as exc:
+                rows.append({"path": p.name, "name": p.stem, "authorized": False,
+                             "targets": f"(invalid: {exc})", "intrusive": False})
+        return render_template("scopes.html", scopes=rows)
+
+    @app.route("/scopes/new", methods=["GET", "POST"])
+    def scope_new():
+        if request.method == "POST":
+            try:
+                path = _write_scope(request.form.get("filename", "scope.yaml"), request.form)
+                flash(f"Scope saved to {path.name}.", "ok")
+                return redirect(url_for("scopes_page"))
+            except (ScopeError, ValueError) as exc:
+                flash(f"Could not save scope: {exc}", "error")
+        return render_template("scope_form.html", scope=None, filename="")
+
+    @app.route("/scopes/<filename>/edit", methods=["GET", "POST"])
+    def scope_edit(filename: str):
+        path = SCOPES_DIR / Path(filename).name
+        if not path.exists():
+            abort(404)
+        if request.method == "POST":
+            try:
+                _write_scope(filename, request.form)
+                flash("Scope updated.", "ok")
+                return redirect(url_for("scopes_page"))
+            except (ScopeError, ValueError) as exc:
+                flash(f"Could not save scope: {exc}", "error")
+        import yaml as _yaml
+        data = _yaml.safe_load(path.read_text()) or {}
+        return render_template("scope_form.html", scope=data, filename=filename)
+
+    @app.route("/scopes/<filename>/delete", methods=["POST"])
+    def scope_delete(filename: str):
+        path = SCOPES_DIR / Path(filename).name
+        if path.exists():
+            path.unlink()
+            flash(f"Deleted {path.name}.", "ok")
+        return redirect(url_for("scopes_page"))
+
+    # ---- OOB listener control ----
+    @app.route("/oob", methods=["GET"])
+    def oob_page():
+        from ..oob import DEFAULT_LOG
+        interactions = []
+        if DEFAULT_LOG.exists():
+            import json
+            for line in DEFAULT_LOG.read_text().splitlines()[-50:]:
+                try:
+                    interactions.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+        interactions.reverse()
+        return render_template("oob.html", running=bool(_oob["listener"]),
+                               port=_oob["port"], interactions=interactions)
+
+    @app.route("/oob/start", methods=["POST"])
+    def oob_start():
+        from ..oob import OobListener
+        if _oob["listener"]:
+            flash("OOB listener already running.", "error")
+            return redirect(url_for("oob_page"))
+        port = int(request.form.get("port") or 8081)
+        try:
+            listener = OobListener(host="0.0.0.0", port=port)
+        except OSError as exc:
+            flash(f"Could not bind port {port}: {exc}", "error")
+            return redirect(url_for("oob_page"))
+        t = threading.Thread(target=listener.serve_forever, daemon=True)
+        t.start()
+        _oob.update(listener=listener, thread=t, port=port)
+        flash(f"OOB listener started on port {port}. Set oob_url in your scope to reach it.", "ok")
+        return redirect(url_for("oob_page"))
+
+    @app.route("/oob/stop", methods=["POST"])
+    def oob_stop():
+        listener = _oob["listener"]
+        if listener:
+            listener.shutdown()
+            _oob.update(listener=None, thread=None, port=None)
+            flash("OOB listener stopped.", "ok")
+        return redirect(url_for("oob_page"))
+
+    # ---- Diff any two scans ----
+    @app.route("/diff")
+    def diff_page():
+        from .. import diff as diffmod
+        scans = store.list_scans()
+        old_id, new_id = request.args.get("old"), request.args.get("new")
+        result = None
+        if old_id and new_id:
+            old, new = store.load(old_id), store.load(new_id)
+            if old and new:
+                result = diffmod.diff_scans(old, new)
+        return render_template("diff.html", scans=scans, diff=result,
+                               old_id=old_id, new_id=new_id)
+
+    # ---- Continuous assessment ----
+    @app.route("/watch")
+    def watch_page():
+        return render_template("watch.html", watchers=_scheduler.list(),
+                               scopes=[{"path": p.name, "name": Scope.load(p).name}
+                                       for p in _discover_scopes()
+                                       if _safe_scope(p)])
+
+    @app.route("/watch/start", methods=["POST"])
+    def watch_start():
+        path = SCOPES_DIR / Path(request.form.get("scope_file", "")).name
+        if not path.exists():
+            flash("scope file not found", "error")
+            return redirect(url_for("watch_page"))
+        try:
+            scope = Scope.load(path)
+            interval = int(request.form.get("interval") or 3600)
+            _scheduler.start(scope, str(path), interval)
+            flash(f"Continuous assessment started for '{scope.name}' every {max(60, interval)}s.", "ok")
+        except ScopeError as exc:
+            flash(str(exc), "error")
+        return redirect(url_for("watch_page"))
+
+    @app.route("/watch/stop", methods=["POST"])
+    def watch_stop():
+        name = request.form.get("scope_name", "")
+        if _scheduler.stop(name):
+            flash(f"Stopped watching '{name}'.", "ok")
+        return redirect(url_for("watch_page"))
+
     return app
+
+
+def _safe_scope(path) -> bool:
+    try:
+        Scope.load(path)
+        return True
+    except ScopeError:
+        return False

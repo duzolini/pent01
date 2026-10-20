@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block body %}
+<h2>Compare two scans</h2>
+<form method="get" action="{{ url_for('diff_page') }}" class="card" style="display:flex;gap:10px;align-items:end;flex-wrap:wrap">
+  <div><label>Baseline (older)</label><br>
+    <select name="old" style="padding:8px;border-radius:7px;border:1px solid var(--line);background:var(--card);color:var(--ink)">
+      {% for s in scans %}<option value="{{ s.scan_id }}" {{ 'selected' if s.scan_id==old_id }}>{{ s.scope_name }} · {{ s.scan_id[:8] }} · {{ s.findings|length }} findings</option>{% endfor %}
+    </select></div>
+  <div><label>Compare to (newer)</label><br>
+    <select name="new" style="padding:8px;border-radius:7px;border:1px solid var(--line);background:var(--card);color:var(--ink)">
+      {% for s in scans %}<option value="{{ s.scan_id }}" {{ 'selected' if s.scan_id==new_id }}>{{ s.scope_name }} · {{ s.scan_id[:8] }} · {{ s.findings|length }} findings</option>{% endfor %}
+    </select></div>
+  <button class="btn" type="submit">Compare</button>
+</form>
+
+{% if diff %}
+<div class="card">
+  <p class="muted">{{ diff.summary() }}</p>
+  {% if diff.new_findings %}<h3 style="color:var(--err)">New findings</h3>
+    {% for f in diff.new_findings %}<div style="font-size:13px"><span class="sev {{ f.severity.value }}">{{ f.severity.value|upper }}</span> {{ f.title }} <code>{{ f.target }}</code></div>{% endfor %}{% endif %}
+  {% if diff.resolved_findings %}<h3 style="color:var(--ok)">Resolved</h3>
+    {% for f in diff.resolved_findings %}<div class="muted" style="font-size:13px">✓ {{ f.title }} <code>{{ f.target }}</code></div>{% endfor %}{% endif %}
+  {% if diff.new_assets %}<h3>New assets</h3>
+    {% for a in diff.new_assets %}<div style="font-size:13px">+ {{ a.kind }}: <code>{{ a.value }}</code></div>{% endfor %}{% endif %}
+  {% if not diff.changed %}<p class="muted">No changes between these two scans.</p>{% endif %}
+</div>
+{% endif %}
+{% endblock %}

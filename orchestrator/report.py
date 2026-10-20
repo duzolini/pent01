@@ -46,6 +46,15 @@ def to_markdown(r: ScanResult) -> str:
         lines.append(f"| {sev.value.title()} | {counts[sev.value]} |")
     lines += ["", f"**Assets discovered:** {len(r.assets)}", ""]
 
+    from . import owasp
+    lines += ["## OWASP Top 10 (2021) coverage", "",
+              "| Cat | Category | Findings | Confirmed |", "|-----|----------|---------:|----------:|"]
+    for row in owasp.coverage(r):
+        count = row["count"] or "—"
+        conf = row["confirmed"] if row["count"] else "—"
+        lines.append(f"| {row['id']} | {row['title']} | {count} | {conf} |")
+    lines.append("")
+
     lines += ["## Findings", ""]
     if not r.findings:
         lines.append("_No findings recorded._")
@@ -181,6 +190,19 @@ def to_html(r: ScanResult) -> str:
         stage_rows += (f"<tr><td>{e(s.stage)}</td><td>{e(s.tool)}</td>"
                        f"<td class='{cls}'>{e(s.status)}</td><td class='muted'>{note}</td></tr>")
 
+    from . import owasp
+    owasp_rows = ""
+    for row in owasp.coverage(r):
+        if row["count"]:
+            sev = row["top_severity"]
+            badge = (f'<span class="sev-badge" style="background:{_SEV_COLOR.get(sev, "#5b6470")}">'
+                     f'{sev.upper()}</span>' if sev else "")
+            status = f'{row["confirmed"]}/{row["count"]} confirmed'
+        else:
+            badge, status = '<span class="muted">—</span>', '<span class="muted">no findings</span>'
+        owasp_rows += (f'<tr><td><code>{row["id"]}</code></td><td>{e(row["title"])}</td>'
+                       f'<td>{badge}</td><td>{status}</td></tr>')
+
     auth = r.authorization or {}
     auth_rows = "".join(
         f"<div><span class='label'>{k.replace('_',' ').title()}</span> {e(str(auth.get(k) or '—'))}</div>"
@@ -225,6 +247,11 @@ td {{ padding:5px 8px; border-bottom:1px solid var(--line); font-size:13px; vert
 
   <h2>Authorization</h2>
   <div class="card meta">{auth_rows}</div>
+
+  <h2>OWASP Top 10 (2021) coverage</h2>
+  <div class="card"><table>
+    <thead><tr><th>Cat</th><th>Category</th><th>Top severity</th><th>Status</th></tr></thead>
+    <tbody>{owasp_rows}</tbody></table></div>
 
   <h2>Findings</h2>
   {finding_rows}

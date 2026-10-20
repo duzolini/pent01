@@ -50,6 +50,10 @@ F = [
     Finding("JWT weak secret", Severity.HIGH, f"{B}/", "nuclei",
             "A JWT appears signed with a weak HMAC secret.",
             metadata={"token": _weak_jwt("secret")}),
+    Finding("Broken access control — admin panel", Severity.HIGH, f"{B}/admin", "nuclei",
+            "Admin page may be reachable without authentication."),
+    Finding("OS command injection", Severity.CRITICAL, f"{B}/ping?host=127.0.0.1", "nuclei",
+            "Parameter 'host' may flow into a shell command.", metadata={"param": "host"}),
 ]
 for f in F:
     r.add_finding(f)

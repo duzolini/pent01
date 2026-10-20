@@ -57,6 +57,21 @@
   {% endfor %}
 </div>
 
+{% if owasp_rows %}
+<h2>OWASP Top 10 <span class="muted">(2021) coverage</span></h2>
+<div class="card">
+  <table><thead><tr><th>Cat</th><th>Category</th><th>Findings</th><th>Confirmed</th></tr></thead><tbody>
+  {% for row in owasp_rows %}
+    <tr style="{{ 'opacity:.5' if not row.count }}">
+      <td><code>{{ row.id }}</code></td><td>{{ row.title }}</td>
+      <td>{% if row.count %}<span class="sev {{ row.top_severity }}">{{ row.count }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+      <td>{% if row.count %}{{ row.confirmed }}/{{ row.count }}{% else %}<span class="muted">—</span>{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody></table>
+</div>
+{% endif %}
+
 <h2>Findings</h2>
 {% if r.findings %}
   {% for f in r.sorted_findings() %}

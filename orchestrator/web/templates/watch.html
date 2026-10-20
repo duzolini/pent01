@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block head %}<meta http-equiv="refresh" content="15">{% endblock %}
+{% block body %}
+<h2>Continuous assessment</h2>
+<div class="banner">Each cycle re-runs the scope's pipeline and diffs against the previous run.
+Minimum interval is 60s so a target is never hammered. Runs happen inside this dashboard process.</div>
+
+<div class="card">
+  <form method="post" action="{{ url_for('watch_start') }}" style="display:flex;gap:10px;align-items:end;flex-wrap:wrap">
+    <div><label>Scope</label><br>
+      <select name="scope_file" style="padding:8px;border-radius:7px;border:1px solid var(--line);background:var(--card);color:var(--ink)">
+        {% for s in scopes %}<option value="{{ s.path }}">{{ s.name }}</option>{% endfor %}
+      </select></div>
+    <div><label>Interval (seconds)</label><br>
+      <input name="interval" value="3600" style="width:120px;padding:8px;border-radius:7px;border:1px solid var(--line);background:var(--card);color:var(--ink)"></div>
+    <button class="btn" type="submit">Start watching</button>
+  </form>
+</div>
+
+<h3>Active watchers</h3>
+<div class="card">
+  <table><thead><tr><th>Scope</th><th>Interval</th><th>Runs</th><th>Last run</th><th>Status</th><th></th></tr></thead><tbody>
+  {% for w in watchers %}
+    <tr>
+      <td>{{ w.scope_name }}</td><td>{{ w.interval }}s</td><td>{{ w.runs }}</td>
+      <td>{% if w.last_run_id %}<a href="{{ url_for('detail', scan_id=w.last_run_id) }}"><code>{{ w.last_run_id[:8] }}</code></a>{% else %}<span class="muted">—</span>{% endif %}</td>
+      <td>{% if w.alive %}<span class="pill yes">running</span>{% else %}<span class="pill no">stopped</span>{% endif %}</td>
+      <td><form method="post" action="{{ url_for('watch_stop') }}" style="display:inline">
+        <input type="hidden" name="scope_name" value="{{ w.scope_name }}">
+        <button class="btn secondary" style="font-size:12px;padding:2px 8px;color:var(--err);border-color:var(--err)">stop</button>
+      </form></td>
+    </tr>
+  {% else %}<tr><td colspan="6" class="muted">no active watchers</td></tr>{% endfor %}
+  </tbody></table>
+</div>
+{% endblock %}
