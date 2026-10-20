@@ -15,6 +15,7 @@ Every validator re-checks scope before sending a request.
 from __future__ import annotations
 
 import base64
+import contextvars
 import hashlib
 import hmac
 import json
@@ -30,10 +31,14 @@ from .scope import Scope
 _UA = "assessment-orchestrator/validator"
 _TIMEOUT = 8
 
+# Authentication headers for the current validation run (set by validate_findings).
+_auth_ctx: contextvars.ContextVar[dict] = contextvars.ContextVar("auth_headers", default={})
+
 
 # ---------------------------------------------------------------------- #
-def _http(url: str, method: str = "GET", follow_redirects: bool = True):
-    """Return (status, headers_lower, body_text). GET/HEAD only — read-only."""
+def _http(url: str, method: str = "GET", follow_redirects: bool = True,
+          headers: dict | None = None, data: bytes | None = None):
+    """Return (status, headers_lower, body_text). Attaches scope auth headers."""
     handlers = []
     if not follow_redirects:
         class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -41,8 +46,12 @@ def _http(url: str, method: str = "GET", follow_redirects: bool = True):
                 return None
         handlers.append(_NoRedirect())
     opener = urllib.request.build_opener(*handlers)
-    req = urllib.request.Request(url, method=method, headers={"User-Agent": _UA})
-    ctx = ssl.create_default_context()
+    h = {"User-Agent": _UA}
+    h.update(_auth_ctx.get() or {})
+    if headers:
+        h.update(headers)
+    req = urllib.request.Request(url, method=method, headers=h, data=data)
+    ctx = ssl.create_default_context()  # noqa: F841 - kept for parity/future use
     try:
         with opener.open(req, timeout=_TIMEOUT) as resp:
             body = "" if method == "HEAD" else resp.read(200_000).decode("utf-8", "replace")
@@ -205,7 +214,8 @@ class SqlInjectionValidator(Validator):
     name = "sqli-boolean"
 
     def matches(self, f: Finding) -> bool:
-        return "sql" in f.title.lower()
+        t = f.title.lower()
+        return "sql" in t and "nosql" not in t
 
     def run(self, f: Finding, scope: Scope) -> Validation:
         if not scope.is_in_scope(f.target):
@@ -463,6 +473,131 @@ class CommandInjectionValidator(Validator):
                           detail="no callback — not injectable, or egress blocked")
 
 
+class SstiValidator(Validator):
+    name = "ssti"
+
+    def matches(self, f: Finding) -> bool:
+        t = f.title.lower()
+        return "ssti" in t or "template injection" in t
+
+    def run(self, f: Finding, scope: Scope) -> Validation:
+        if not scope.is_in_scope(f.target):
+            return Validation("skipped", self.name, detail="target out of scope")
+        param = f.metadata.get("param", "q")
+        # Arithmetic marker: a vulnerable template engine evaluates 1337*1337.
+        for payload in ("{{1337*1337}}", "${1337*1337}", "#{1337*1337}", "<%= 1337*1337 %>"):
+            _, _, body = _http(_with_param(f.target, param, payload))
+            if "1787569" in body:
+                return Validation("confirmed", self.name,
+                                  evidence=f"template evaluated {payload} -> 1787569",
+                                  detail="Server-side template injection confirmed.")
+        return Validation("not_confirmed", self.name, detail="no template evaluation observed")
+
+
+class NoSqlInjectionValidator(Validator):
+    name = "nosql-injection"
+
+    def matches(self, f: Finding) -> bool:
+        return "nosql" in f.title.lower()
+
+    def run(self, f: Finding, scope: Scope) -> Validation:
+        if not scope.is_in_scope(f.target):
+            return Validation("skipped", self.name, detail="target out of scope")
+        parts = urllib.parse.urlparse(f.target)
+        params = dict(urllib.parse.parse_qsl(parts.query, keep_blank_values=True))
+        candidates = [f.metadata["param"]] if f.metadata.get("param") else list(params) or ["username"]
+        for param in candidates:
+            base = params.get(param, "x")
+            try:
+                _, _, b_base = _http(_with_param(f.target, param, base))
+                _, _, b_true = _http(_with_param(f.target, param, f"{base}' || '1'=='1"))
+                _, _, b_false = _http(_with_param(f.target, param, f"{base}' || '1'=='2"))
+            except Exception:  # noqa: BLE001
+                continue
+            if _similar(b_base, b_true) and not _similar(b_true, b_false):
+                return Validation("confirmed", self.name,
+                                  evidence=f"NoSQL boolean differential on '{param}'",
+                                  detail="NoSQL injection confirmed (non-destructive).")
+        return Validation("not_confirmed", self.name, detail="no differential observed")
+
+
+class XxeValidator(Validator):
+    name = "xxe"
+
+    def matches(self, f: Finding) -> bool:
+        return "xxe" in f.title.lower() or "xml external entity" in f.title.lower()
+
+    def run(self, f: Finding, scope: Scope) -> Validation:
+        if not scope.is_in_scope(f.target):
+            return Validation("skipped", self.name, detail="target out of scope")
+        payload = ('<?xml version="1.0"?><!DOCTYPE r [<!ENTITY xxe SYSTEM '
+                   '"file:///etc/passwd">]><r>&xxe;</r>')
+        try:
+            _, _, body = _http(f.target, method="POST",
+                               headers={"Content-Type": "application/xml"},
+                               data=payload.encode())
+        except Exception as exc:  # noqa: BLE001
+            return Validation("error", self.name, detail=str(exc))
+        if "root:x:0:0" in body:
+            idx = body.find("root:x:0:0")
+            return Validation("confirmed", self.name,
+                              evidence=f"external entity resolved /etc/passwd: {body[idx:idx + 40]}",
+                              detail="XML external entity (XXE) file read confirmed.")
+        return Validation("not_confirmed", self.name, detail="entity not resolved in response")
+
+
+class GraphqlValidator(Validator):
+    name = "graphql"
+
+    def matches(self, f: Finding) -> bool:
+        return "graphql" in f.title.lower()
+
+    def run(self, f: Finding, scope: Scope) -> Validation:
+        if not scope.is_in_scope(f.target):
+            return Validation("skipped", self.name, detail="target out of scope")
+        query = json.dumps({"query": "{__schema{types{name}}}"}).encode()
+        try:
+            status, _, body = _http(f.target, method="POST",
+                                    headers={"Content-Type": "application/json"}, data=query)
+        except Exception as exc:  # noqa: BLE001
+            return Validation("error", self.name, detail=str(exc))
+        if status == 200 and "__schema" in body and '"name"' in body:
+            return Validation("confirmed", self.name,
+                              evidence="introspection query returned the schema",
+                              detail="GraphQL introspection is enabled (information disclosure).")
+        return Validation("not_confirmed", self.name, detail="introspection not exposed")
+
+
+class SubdomainTakeoverValidator(Validator):
+    name = "subdomain-takeover"
+    _FINGERPRINTS = {
+        "GitHub Pages": "There isn't a GitHub Pages site here",
+        "AWS S3": "NoSuchBucket",
+        "Heroku": "No such app",
+        "Fastly": "Fastly error: unknown domain",
+        "Shopify": "Sorry, this shop is currently unavailable",
+        "Bitbucket": "Repository not found",
+        "Zendesk": "Help Center Closed",
+    }
+
+    def matches(self, f: Finding) -> bool:
+        return "takeover" in f.title.lower()
+
+    def run(self, f: Finding, scope: Scope) -> Validation:
+        if not scope.is_in_scope(f.target):
+            return Validation("skipped", self.name, detail="target out of scope")
+        try:
+            _, _, body = _http(f.target)
+        except Exception as exc:  # noqa: BLE001
+            return Validation("error", self.name, detail=str(exc))
+        for service, sig in self._FINGERPRINTS.items():
+            if sig in body:
+                return Validation("confirmed", self.name,
+                                  evidence=f"{service} dangling fingerprint: {sig!r}",
+                                  detail=f"Subdomain points at unclaimed {service} resource.")
+        return Validation("not_confirmed", self.name, detail="no takeover fingerprint matched")
+
+
 def _b64url_decode(data: str) -> bytes:
     return base64.urlsafe_b64decode(data + "=" * (-len(data) % 4))
 
@@ -477,6 +612,8 @@ _REGISTRY: list[Validator] = [
     OpenRedirectValidator(), ReflectedXssValidator(), LfiValidator(),
     SqlInjectionValidator(), CorsValidator(), SsrfValidator(), JwtValidator(),
     BlindXssValidator(), AccessControlValidator(), CommandInjectionValidator(),
+    SstiValidator(), NoSqlInjectionValidator(), XxeValidator(), GraphqlValidator(),
+    SubdomainTakeoverValidator(),
 ]
 
 
@@ -485,6 +622,16 @@ def validate_findings(result, scope: Scope,
     """Attach a Validation to each finding a validator can confirm. Returns count confirmed."""
     from . import owasp
     scope.require_authorized()
+
+    # Authenticated scanning: attach the scope's credentials to every request.
+    token = None
+    if scope.auth:
+        from .authsession import build_headers, AuthError
+        try:
+            token = _auth_ctx.set(build_headers(scope.auth))
+        except AuthError:
+            token = None  # fall back to unauthenticated if login fails
+
     confirmed = 0
     for f in result.findings:
         validator = next((v for v in _REGISTRY if v.matches(f)), None)
@@ -508,4 +655,6 @@ def validate_findings(result, scope: Scope,
                 f.metadata["owasp"] = cat
         if on_each:
             on_each(f)
+    if token is not None:
+        _auth_ctx.reset(token)
     return confirmed

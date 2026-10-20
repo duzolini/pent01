@@ -76,6 +76,83 @@ def ping():
     return Response(out.stdout, mimetype="text/plain")
 
 
+@app.route("/greet")
+def greet():
+    # SSTI: {{ arithmetic }} is evaluated, mimicking a vulnerable template engine.
+    import re
+    name = request.args.get("name", "guest")
+    m = re.search(r"\{\{([-+*/() 0-9]+)\}\}|\$\{([-+*/() 0-9]+)\}", name)
+    if m:
+        expr = m.group(1) or m.group(2)
+        try:
+            name = str(eval(expr, {"__builtins__": {}}, {}))  # noqa: S307 - lab only
+        except Exception:  # noqa: BLE001
+            pass
+    return f"<h1>Hello {name}</h1>"
+
+
+@app.route("/xml", methods=["POST"])
+def xml():
+    # XXE: an external entity referencing a local file is resolved.
+    body = request.get_data(as_text=True)
+    if 'SYSTEM "file:///etc/passwd"' in body and "&xxe;" in body:
+        try:
+            with open("/etc/passwd") as fh:
+                return Response(body.replace("&xxe;", fh.read()), mimetype="application/xml")
+        except OSError:
+            pass
+    return Response("<r>ok</r>", mimetype="application/xml")
+
+
+@app.route("/graphql", methods=["POST"])
+def graphql():
+    # GraphQL with introspection left enabled.
+    data = request.get_json(silent=True) or {}
+    if "__schema" in (data.get("query") or ""):
+        return {"data": {"__schema": {"types": [{"name": "User"}, {"name": "Query"}]}}}
+    return {"data": {}}
+
+
+@app.route("/login-nosql")
+def login_nosql():
+    # NoSQL injection: the boolean in the username decides the result.
+    USERS = {"admin": "admin record", "bob": "bob record"}
+    raw = request.args.get("username", "admin")
+    real = raw.split("'")[0]
+    cond_true = ("'1'=='1" in raw) or ("'" not in raw)
+    if real in USERS and cond_true:
+        return USERS[real]
+    return "No user found"
+
+
+_SESSIONS = set()
+
+
+@app.route("/login", methods=["POST"])
+def login():
+    if request.form.get("user") == "admin" and request.form.get("pass") == "admin":
+        resp = Response("Welcome admin")
+        resp.headers["Set-Cookie"] = "session=valid; Path=/"
+        return resp
+    return Response("invalid", status=401)
+
+
+@app.route("/takeover")
+def takeover():
+    # Dangling resource fingerprint (as a claimable S3 bucket would return).
+    return Response("<Error><Code>NoSuchBucket</Code></Error>", status=404)
+
+
+@app.route("/secret")
+def secret():
+    # Protected resource: needs a valid session cookie or bearer token.
+    cookie_ok = "session=valid" in request.headers.get("Cookie", "")
+    bearer_ok = request.headers.get("Authorization") == "Bearer testtoken"
+    if cookie_ok or bearer_ok:
+        return "<h1>Account settings</h1><p>secret data</p>"
+    return Response("Unauthorized — please sign in", status=401)
+
+
 @app.route("/.git/config")
 def git_config():
     return Response("[core]\n\trepositoryformatversion = 0\n\tbare = false\n"

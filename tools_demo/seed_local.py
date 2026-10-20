@@ -54,6 +54,16 @@ F = [
             "Admin page may be reachable without authentication."),
     Finding("OS command injection", Severity.CRITICAL, f"{B}/ping?host=127.0.0.1", "nuclei",
             "Parameter 'host' may flow into a shell command.", metadata={"param": "host"}),
+    Finding("SSTI candidate", Severity.CRITICAL, f"{B}/greet?name=guest", "nuclei",
+            "Parameter 'name' may be evaluated by a template engine.", metadata={"param": "name"}),
+    Finding("XXE candidate", Severity.HIGH, f"{B}/xml", "nuclei",
+            "XML endpoint may resolve external entities."),
+    Finding("NoSQL injection", Severity.HIGH, f"{B}/login-nosql?username=admin", "nuclei",
+            "Parameter 'username' may be injectable.", metadata={"param": "username"}),
+    Finding("GraphQL introspection", Severity.MEDIUM, f"{B}/graphql", "nuclei",
+            "GraphQL introspection may be enabled."),
+    Finding("Subdomain takeover", Severity.HIGH, f"{B}/takeover", "nuclei",
+            "Host may point at an unclaimed resource."),
 ]
 for f in F:
     r.add_finding(f)

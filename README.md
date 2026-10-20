@@ -54,6 +54,13 @@ Confirma o finding sem causar dano e anexa a evidência:
 | CORS misconfig | `Access-Control-Allow-Origin` reflete origem arbitrária (+ credenciais) |
 | SSRF | servidor busca URL do atacante; canário OOB refletido (não-cego) |
 | JWT fraco | `alg:none`, ou secret HMAC quebrado offline por lista |
+| SSTI | template avalia aritmética injetada (`{{1337*1337}}` → `1787569`) |
+| XXE | entidade externa resolve `file:///etc/passwd` (POST XML) |
+| NoSQL injection | diferencial booleano com operadores NoSQL |
+| GraphQL | introspection habilitada devolve o schema |
+| Subdomain takeover | fingerprint de recurso órfão (S3/GitHub Pages/Heroku…) |
+| Access control | recurso sensível responde 200 sem autenticação |
+| Command injection | RCE cega confirmada por callback OOB (exige `intrusive`) |
 
 Nada aqui escreve, apaga ou extrai em massa — só confirma.
 
@@ -99,6 +106,42 @@ Coloque esse `base-url` no escopo (`oob_url: http://SEU_IP:8081`). Os validators
 de SSRF/blind-XSS plantam `oob_url/<token>` no ponto suspeito e aguardam o
 callback; se chegar uma requisição com o token, a vuln cega é **confirmada**
 (com o IP de origem como evidência). O listener é passivo — só registra.
+
+## Scanning autenticado
+
+Muitas falhas só aparecem logado (access control, IDOR, stored XSS). Declare as
+credenciais no escopo (campo `auth`) e os validators as anexam em toda requisição:
+
+```yaml
+auth:
+  type: bearer            # bearer | cookie | basic | header | form
+  token: "eyJ..."
+# ou login por formulário (captura o cookie de sessão):
+# auth:
+#   type: form
+#   login_url: "https://app/login"
+#   data: { user: "admin", pass: "admin" }
+#   success: "Welcome"    # marcador que prova que logou
+```
+
+Também dá pra configurar pelo formulário de escopo no dashboard. As credenciais
+ficam só no arquivo de escopo que você controla.
+
+## Export / integração
+
+Exporte os findings (com score CVSS indicativo e um comando de reprodução por
+finding) nos formatos que entram no seu pipeline:
+
+```bash
+orchestrator export <SCAN_ID> --format sarif      -o out.sarif   # GitHub code scanning
+orchestrator export <SCAN_ID> --format json       -o findings.json
+orchestrator export <SCAN_ID> --format csv        -o findings.csv
+orchestrator export <SCAN_ID> --format defectdojo -o dd.json     # DefectDojo generic import
+```
+
+No dashboard, a tela do scan tem links de download direto (SARIF/JSON/CSV/DefectDojo).
+O **SARIF** entra direto no GitHub code scanning; o **DefectDojo** usa o formato
+"Generic Findings Import".
 
 ## Assessment contínuo
 

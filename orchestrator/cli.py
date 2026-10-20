@@ -45,6 +45,12 @@ _EXAMPLE_SCOPE = textwrap.dedent("""\
     intrusive: false        # true enables fuzz/brute/dos templates AND active exploit plans
     validate: true          # run safe, non-destructive confirmation of findings
     oob_url: ""             # base URL of your OOB listener (for blind SSRF/XSS), e.g. http://1.2.3.4:8081
+
+    # Optional — authenticated scanning (uncomment one):
+    # auth: {type: bearer, token: "..."}
+    # auth: {type: cookie, cookie: "session=..."}
+    # auth: {type: basic, username: u, password: p}
+    # auth: {type: form, login_url: "https://app/login", data: {user: u, pass: p}, success: "Welcome"}
     """)
 
 
@@ -238,6 +244,26 @@ def _cmd_watch(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_export(args: argparse.Namespace) -> int:
+    from . import export as exp
+    result = store.load(args.scan_id)
+    if result is None:
+        print(f"no such scan: {args.scan_id}", file=sys.stderr)
+        return 1
+    try:
+        text = exp.export(result, args.format)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    if args.output:
+        from pathlib import Path
+        Path(args.output).write_text(text)
+        print(f"wrote {args.output}")
+    else:
+        print(text)
+    return 0
+
+
 def _cmd_report(args: argparse.Namespace) -> int:
     result = store.load(args.scan_id)
     if result is None:
@@ -337,6 +363,12 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--interval", type=int, default=3600, help="seconds between runs")
     s.add_argument("--max-runs", type=int, default=0, help="stop after N runs (0 = unlimited)")
     s.set_defaults(func=_cmd_watch)
+
+    s = sub.add_parser("export", help="export findings (sarif/json/csv/defectdojo)")
+    s.add_argument("scan_id")
+    s.add_argument("--format", choices=["sarif", "json", "csv", "defectdojo"], default="sarif")
+    s.add_argument("-o", "--output")
+    s.set_defaults(func=_cmd_export)
 
     s = sub.add_parser("report", help="render a stored scan as a report")
     s.add_argument("scan_id")

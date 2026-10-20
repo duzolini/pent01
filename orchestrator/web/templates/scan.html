@@ -17,6 +17,13 @@
   </form>
   {% endif %}
 </p>
+<p style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-size:12px">
+  <span class="muted">Export:</span>
+  <a href="{{ url_for('export_scan', scan_id=r.scan_id, fmt='sarif') }}">SARIF</a> ·
+  <a href="{{ url_for('export_scan', scan_id=r.scan_id, fmt='json') }}">JSON</a> ·
+  <a href="{{ url_for('export_scan', scan_id=r.scan_id, fmt='csv') }}">CSV</a> ·
+  <a href="{{ url_for('export_scan', scan_id=r.scan_id, fmt='defectdojo') }}">DefectDojo</a>
+</p>
 
 {% if r.authorization %}
 <div class="card">

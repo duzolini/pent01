@@ -29,8 +29,9 @@ VALIDATOR_OWASP: dict[str, str] = {
     "cors-misconfig": "A05",
     "open-redirect": "A01", "lfi": "A01", "access-control": "A01",
     "reflected-xss": "A03", "blind-xss": "A03", "sqli-boolean": "A03",
-    "command-injection": "A03",
+    "command-injection": "A03", "ssti": "A03", "nosql-injection": "A03",
     "tls-check": "A02", "jwt-weakness": "A02",
+    "xxe": "A05", "graphql": "A05", "subdomain-takeover": "A05",
     "ssrf": "A10",
 }
 

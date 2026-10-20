@@ -46,6 +46,21 @@ active exploitation; leave it OFF unless active testing is authorized.</div>
   <div class="check"><input type="checkbox" name="intrusive" id="i" {{ 'checked' if s.intrusive }}>
     <label for="i" style="margin:0">Intrusive — allow active exploitation (authorized engagements only)</label></div>
 
+  {% set a = s.auth or {} %}
+  <h3 style="margin-top:16px">Authenticated scanning (optional)</h3>
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+    <div><label>Auth type</label>
+      <select name="auth_type" style="width:100%;padding:8px;border-radius:7px;border:1px solid var(--line);background:var(--card);color:var(--ink)">
+        {% for t in ['none','bearer','cookie','basic','form'] %}
+          <option value="{{ t }}" {{ 'selected' if (a.type or 'none')==t }}>{{ t }}</option>{% endfor %}
+      </select></div>
+    <div><label>Bearer token</label><input name="auth_token" value="{{ a.token or '' }}" style="width:100%;padding:8px;border-radius:7px;border:1px solid var(--line);background:var(--card);color:var(--ink)"></div>
+    <div><label>Cookie</label><input name="auth_cookie" value="{{ a.cookie or '' }}" style="width:100%;padding:8px;border-radius:7px;border:1px solid var(--line);background:var(--card);color:var(--ink)"></div>
+    <div><label>Username</label><input name="auth_username" value="{{ a.username or (a.data and a.data.values()|list|first) or '' }}" style="width:100%;padding:8px;border-radius:7px;border:1px solid var(--line);background:var(--card);color:var(--ink)"></div>
+    <div><label>Password</label><input name="auth_password" type="password" style="width:100%;padding:8px;border-radius:7px;border:1px solid var(--line);background:var(--card);color:var(--ink)"></div>
+    <div><label>Form login URL</label><input name="auth_login_url" value="{{ a.login_url or '' }}" style="width:100%;padding:8px;border-radius:7px;border:1px solid var(--line);background:var(--card);color:var(--ink)"></div>
+  </div>
+
   <button class="btn" type="submit" style="margin-top:12px">Save scope</button>
   <a class="btn secondary" href="{{ url_for('scopes_page') }}">Cancel</a>
 </form>

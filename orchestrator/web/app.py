@@ -41,6 +41,26 @@ def _list_field(raw: str) -> list[str]:
     return items
 
 
+def _auth_from_form(form) -> dict:
+    """Build the scope's auth block from the form's authenticated-scanning fields."""
+    kind = (form.get("auth_type") or "").strip().lower()
+    if kind in ("", "none"):
+        return {}
+    if kind == "bearer":
+        return {"type": "bearer", "token": form.get("auth_token", "").strip()}
+    if kind == "cookie":
+        return {"type": "cookie", "cookie": form.get("auth_cookie", "").strip()}
+    if kind == "basic":
+        return {"type": "basic", "username": form.get("auth_username", "").strip(),
+                "password": form.get("auth_password", "").strip()}
+    if kind == "form":
+        return {"type": "form", "login_url": form.get("auth_login_url", "").strip(),
+                "data": {form.get("auth_user_field", "username"): form.get("auth_username", "").strip(),
+                         form.get("auth_pass_field", "password"): form.get("auth_password", "").strip()},
+                "success": form.get("auth_success", "").strip()}
+    return {}
+
+
 def _write_scope(filename: str, form) -> Path:
     """Build a scope YAML from submitted form fields and write it."""
     if not filename.endswith((".yaml", ".yml")):
@@ -63,7 +83,10 @@ def _write_scope(filename: str, form) -> Path:
         "intrusive": form.get("intrusive") == "on",
         "validate": form.get("validate") == "on",
         "oob_url": form.get("oob_url", "").strip(),
+        "auth": _auth_from_form(form),
     }
+    if not data["auth"]:
+        data.pop("auth")
     # Validate before writing so the UI can reject bad input.
     Scope(name=data["name"], authorized=data["authorized"], domains=data["domains"],
           hosts=data["hosts"], cidrs=data["cidrs"])
@@ -229,6 +252,22 @@ def create_app() -> Flask:
         if result is None:
             abort(404)
         return Response(report.to_markdown(result), mimetype="text/plain")
+
+    @app.route("/scan/<scan_id>/export/<fmt>")
+    def export_scan(scan_id: str, fmt: str):
+        from .. import export as exp
+        result = store.load(scan_id)
+        if result is None:
+            abort(404)
+        try:
+            text = exp.export(result, fmt)
+        except ValueError:
+            abort(404)
+        mime = "text/csv" if fmt == "csv" else "application/json"
+        fname = exp.FORMATS[fmt][1]
+        return Response(text, mimetype=mime,
+                        headers={"Content-Disposition":
+                                 f"attachment; filename={scan_id[:8]}-{fname}"})
 
     # ---- Scope management (no YAML editing by hand) ----
     @app.route("/scopes")
